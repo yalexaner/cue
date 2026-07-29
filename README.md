@@ -18,4 +18,18 @@ just test    # unit tests (Swift Testing)
 just ipa     # unsigned device .ipa in build/
 ```
 
+## Development
+
+Lint and format tooling (`swift-format` ships with Xcode):
+
+```sh
+brew install just swiftlint
+```
+
+```sh
+just lint          # swiftlint --strict, config in .swiftlint.yml
+just format        # swift-format in place, config in .swift-format
+just format-check  # swift-format lint --strict, no writes
+```
+
 See `SPEC.md` for what this app is and `ROADMAP.md` for how it is built.

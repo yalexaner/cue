@@ -1,0 +1,21 @@
+# SwiftLint configuration for cue.
+# Close to defaults; force_try is already a default rule, so it is not opted in.
+
+included:
+  - cue
+  - cueTests
+
+excluded:
+  - build
+  - DerivedData
+
+opt_in_rules:
+  - force_unwrapping
+  - implicitly_unwrapped_optional
+
+line_length: 120
+
+# SwiftData models and SwiftUI views legitimately run long.
+type_body_length:
+  warning: 400
+  error: 600
