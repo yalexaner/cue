@@ -32,4 +32,7 @@ just format        # swift-format in place, config in .swift-format
 just format-check  # swift-format lint --strict, no writes
 ```
 
+Secret hygiene — never commit a real feed URL; run `gitleaks detect --no-git`
+before pushing. See `docs/SECRETS.md`.
+
 See `SPEC.md` for what this app is and `ROADMAP.md` for how it is built.

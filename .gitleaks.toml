@@ -1,0 +1,43 @@
+title = "cue — secret scanning"
+
+# start from the upstream ruleset, then add feed-specific rules
+[extend]
+useDefault = true
+
+# a private podcast feed URL carries its authentication token in the URL itself
+# (Boosty and friends). one committed real URL = a permanently burned token.
+[[rules]]
+id = "private-feed-url-query-token"
+description = "Feed-shaped URL carrying an auth token in a query parameter"
+regex = '''(?i)\bhttps?://[^\s'"<>()\[\]{}]+[?&](?:access[_-]?token|auth[_-]?token|api[_-]?key|token|auth|secret|key|sig|signature)=([A-Za-z0-9._~+/=-]{8,})'''
+secretGroup = 1
+tags = ["feed", "url", "token"]
+
+[[rules.allowlists]]
+description = "documented fixture placeholder"
+regexTarget = "match"
+regexes = ['''REDACTED_TEST_TOKEN''']
+
+# a private feed can also hide its secret in a long random path segment
+# rather than a query parameter
+[[rules]]
+id = "private-feed-host-url"
+description = "Private-feed host URL with a long high-entropy path segment"
+regex = '''(?i)\bhttps?://[a-z0-9.-]*\bboosty\b[a-z0-9.-]*/[^\s'"<>()\[\]{}]*?([A-Za-z0-9_-]{20,})'''
+secretGroup = 1
+entropy = 3.0
+tags = ["feed", "url", "token"]
+
+[[rules.allowlists]]
+description = "documented fixture placeholder"
+regexTarget = "match"
+regexes = ['''REDACTED_TEST_TOKEN''']
+
+[[allowlists]]
+description = "documented fixture placeholder — https://example.com/feed?token=REDACTED_TEST_TOKEN"
+regexTarget = "line"
+regexes = ['''REDACTED_TEST_TOKEN''']
+
+[[allowlists]]
+description = "the scanner configuration itself only contains patterns"
+paths = ['''^\.gitleaks\.toml$''']
