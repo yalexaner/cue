@@ -1,0 +1,10 @@
+#include "Shared.xcconfig"
+
+ONLY_ACTIVE_ARCH = YES
+SWIFT_OPTIMIZATION_LEVEL = -Onone
+GCC_OPTIMIZATION_LEVEL = 0
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG
+DEBUG_INFORMATION_FORMAT = dwarf
+// required for @testable import; without it the error is a misleading
+// "unable to resolve Swift module dependency to a compatible module"
+ENABLE_TESTABILITY = YES

@@ -1,0 +1,298 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXContainerItemProxy section */
+		AA0000000000000000000051 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA0000000000000000000010;
+			remoteInfo = cue;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		AA0000000000000000000011 /* cue.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = cue.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0000000000000000000021 /* cueTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = cueTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		AA0000000000000000000032 /* Exceptions for "cue" folder in "cue" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"Support/Info.plist",
+			);
+			target = AA0000000000000000000010 /* cue */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		AA0000000000000000000030 /* cue */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				AA0000000000000000000032 /* Exceptions for "cue" folder in "cue" target */,
+			);
+			explicitFileTypes = {
+			};
+			explicitFolders = (
+			);
+			path = cue;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000031 /* cueTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			explicitFileTypes = {
+			};
+			explicitFolders = (
+			);
+			path = cueTests;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000033 /* Config */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			explicitFileTypes = {
+			};
+			explicitFolders = (
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		AA0000000000000000000013 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000000000000000000023 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		AA0000000000000000000002 = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000030 /* cue */,
+				AA0000000000000000000031 /* cueTests */,
+				AA0000000000000000000033 /* Config */,
+				AA0000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000011 /* cue.app */,
+				AA0000000000000000000021 /* cueTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AA0000000000000000000010 /* cue */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0000000000000000000045 /* Build configuration list for PBXNativeTarget "cue" */;
+			buildPhases = (
+				AA0000000000000000000012 /* Sources */,
+				AA0000000000000000000013 /* Frameworks */,
+				AA0000000000000000000014 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				AA0000000000000000000030 /* cue */,
+			);
+			name = cue;
+			productName = cue;
+			productReference = AA0000000000000000000011 /* cue.app */;
+			productType = "com.apple.product-type.application";
+		};
+		AA0000000000000000000020 /* cueTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0000000000000000000048 /* Build configuration list for PBXNativeTarget "cueTests" */;
+			buildPhases = (
+				AA0000000000000000000022 /* Sources */,
+				AA0000000000000000000023 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA0000000000000000000050 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AA0000000000000000000031 /* cueTests */,
+			);
+			name = cueTests;
+			productName = cueTests;
+			productReference = AA0000000000000000000021 /* cueTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AA0000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					AA0000000000000000000020 = {
+						TestTargetID = AA0000000000000000000010;
+					};
+				};
+			};
+			buildConfigurationList = AA0000000000000000000042 /* Build configuration list for PBXProject "cue" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = AA0000000000000000000002;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = AA0000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AA0000000000000000000010 /* cue */,
+				AA0000000000000000000020 /* cueTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AA0000000000000000000014 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AA0000000000000000000012 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000000000000000000022 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AA0000000000000000000050 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA0000000000000000000010 /* cue */;
+			targetProxy = AA0000000000000000000051 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		AA0000000000000000000040 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = AA0000000000000000000033 /* Config */;
+			baseConfigurationReferenceRelativePath = Debug.xcconfig;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+		AA0000000000000000000041 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = AA0000000000000000000033 /* Config */;
+			baseConfigurationReferenceRelativePath = Release.xcconfig;
+			buildSettings = {
+			};
+			name = Release;
+		};
+		AA0000000000000000000043 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = AA0000000000000000000033 /* Config */;
+			baseConfigurationReferenceRelativePath = App.xcconfig;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+		AA0000000000000000000044 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = AA0000000000000000000033 /* Config */;
+			baseConfigurationReferenceRelativePath = App.xcconfig;
+			buildSettings = {
+			};
+			name = Release;
+		};
+		AA0000000000000000000046 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = AA0000000000000000000033 /* Config */;
+			baseConfigurationReferenceRelativePath = Tests.xcconfig;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+		AA0000000000000000000047 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = AA0000000000000000000033 /* Config */;
+			baseConfigurationReferenceRelativePath = Tests.xcconfig;
+			buildSettings = {
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AA0000000000000000000042 /* Build configuration list for PBXProject "cue" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000000040 /* Debug */,
+				AA0000000000000000000041 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0000000000000000000045 /* Build configuration list for PBXNativeTarget "cue" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000000043 /* Debug */,
+				AA0000000000000000000044 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0000000000000000000048 /* Build configuration list for PBXNativeTarget "cueTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000000046 /* Debug */,
+				AA0000000000000000000047 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = AA0000000000000000000001 /* Project object */;
+}
