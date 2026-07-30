@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<opml version="2.0">
+  <head>
+    <title>Example Podcast Subscriptions</title>
+    <dateCreated>Sat, 12 Jul 2025 09:00:00 GMT</dateCreated>
+    <dateModified>Sat, 12 Jul 2025 09:00:00 UTC</dateModified>
+  </head>
+  <body>
+    <outline text="feeds" title="feeds">
+      <outline type="rss" text="Simple Example Podcast" title="Simple Example Podcast" xmlUrl="https://example.com/simple/feed.rss" htmlUrl="https://example.com/simple"/>
+      <outline type="rss" text="iTunes Example Podcast" title="iTunes Example Podcast" xmlUrl="https://example.com/itunes/feed.rss" htmlUrl="https://example.com/itunes"/>
+      <outline type="rss" text="Duration Formats Example" title="Duration Formats Example" xmlUrl="https://example.org/durations/feed.rss" htmlUrl="https://example.org/durations"/>
+      <outline type="rss" text="Example Newsroom Headlines &amp; Notices" title="Example Newsroom Headlines &amp; Notices" xmlUrl="https://example.org/news/feed.rss" htmlUrl="https://example.org/news"/>
+      <outline type="rss" text="Пример Закрытого Фида" title="Пример Закрытого Фида" xmlUrl="https://example.com/feed/private?token=REDACTED_TEST_TOKEN&amp;format=rss"/>
+      <outline text="Example Feed Without A Type Attribute" xmlUrl="https://example.org/typeless/feed.rss" htmlUrl="https://example.org/typeless"/>
+      <outline type="rss" text="Simple Example Podcast (duplicate entry)" title="Simple Example Podcast (duplicate entry)" xmlUrl="https://example.com/simple/feed.rss" htmlUrl="https://example.com/simple"/>
+    </outline>
+  </body>
+</opml>

@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>iTunes Example Podcast</title>
+    <link>https://example.com/itunes</link>
+    <atom:link href="https://example.com/itunes/feed.rss" rel="self" type="application/rss+xml"/>
+    <atom:link href="https://hub.example.com/" rel="hub"/>
+    <generator>Example Feed Generator (https://example.com/generator)</generator>
+    <description>A podcast feed exercising the full itunes namespace alongside plain RSS 2.0 elements.</description>
+    <language>en-us</language>
+    <copyright>&#169; 2025 Example Media</copyright>
+    <managingEditor>editor@example.com (Fallback Editor Name)</managingEditor>
+    <pubDate>Thu, 20 Feb 2025 12:00:00 GMT</pubDate>
+    <lastBuildDate>Thu, 20 Feb 2025 12:00:00 GMT</lastBuildDate>
+    <itunes:new-feed-url>https://example.com/itunes/feed.rss</itunes:new-feed-url>
+    <itunes:author>Example Media Collective</itunes:author>
+    <itunes:owner>
+      <itunes:name>Example Media Collective</itunes:name>
+      <itunes:email>owner@example.com</itunes:email>
+    </itunes:owner>
+    <itunes:summary>Long-form conversations recorded at Example Media. This summary exists so the parser has an itunes:summary to prefer over description.</itunes:summary>
+    <itunes:subtitle>Conversations from Example Media</itunes:subtitle>
+    <itunes:image href="https://example.com/itunes/artwork/show-3000.jpg"/>
+    <itunes:keywords>example,technology,interviews,long-form</itunes:keywords>
+    <itunes:category text="Technology"/>
+    <itunes:category text="News">
+      <itunes:category text="Tech News"/>
+    </itunes:category>
+    <itunes:explicit>false</itunes:explicit>
+    <itunes:type>episodic</itunes:type>
+    <itunes:block>no</itunes:block>
+    <image>
+      <url>https://example.com/itunes/artwork/show-fallback-600.jpg</url>
+      <title>iTunes Example Podcast</title>
+      <link>https://example.com/itunes</link>
+    </image>
+    <item>
+      <title><![CDATA[Episode 1: Namespaces All the Way Down]]></title>
+      <link>https://example.com/itunes/1</link>
+      <description><![CDATA[<ul>
+<li>Pre-show: what a namespace prefix actually binds to</li>
+<li>Follow-up:
+
+<ul>
+<li>An <a href="https://example.com/itunes/notes/1">episode note</a> that nests a list inside a list item</li>
+<li>Escaping <code>&lt;rss&gt;</code> inside markup the parser must not treat as elements</li>
+<li>Curly punctuation that arrives as raw UTF-8: the parser&#8217;s job is to pass it through</li>
+</ul></li>
+<li>Ask Example: &#8220;does description or itunes:summary win?&#8221;&#160;</li>
+</ul>]]></description>
+      <content:encoded><![CDATA[
+
+<p>The long-form show notes for episode one, delivered in content:encoded rather than description.</p>
+
+<p><strong>Sponsored by:</strong></p>
+
+<ul>
+<li><a href="https://sponsor.example.com/one">Example Sponsor One</a>: a paragraph of promotional copy with an &amp; in it.</li>
+<li><a href="https://sponsor.example.com/two">Example Sponsor Two</a>: use code <strong>EXAMPLE50</strong>.</li>
+</ul>
+
+<p>&#169; 2025 Example Media</p>]]></content:encoded>
+      <guid isPermaLink="false">itunes-example-0001</guid>
+      <pubDate>Thu, 06 Feb 2025 08:00:00 GMT</pubDate>
+      <enclosure url="https://example.com/itunes/audio/episode-1.mp3" type="audio/mpeg" length="41230000"/>
+      <itunes:title>Namespaces All the Way Down</itunes:title>
+      <itunes:author>Example Media Collective</itunes:author>
+      <itunes:summary>An itunes:summary for episode one, longer and more descriptive than the plain description element.</itunes:summary>
+      <itunes:duration>00:42:17</itunes:duration>
+      <itunes:episodeType>full</itunes:episodeType>
+      <itunes:episode>1</itunes:episode>
+      <itunes:season>1</itunes:season>
+      <itunes:explicit>false</itunes:explicit>
+      <itunes:image href="https://example.com/itunes/artwork/episode-1.jpg"/>
+    </item>
+    <item>
+      <title>Episode 2: Fallbacks, Defaults &amp; Entities</title>
+      <link>https://example.com/itunes/2</link>
+      <description>Plain RSS description for episode two, with an escaped ampersand (&amp;), an escaped apostrophe (&#39;), an escaped quote (&quot;) and a raw non-ASCII dash &#8212; all of which must survive the parser.</description>
+      <guid isPermaLink="false">itunes-example-0002</guid>
+      <pubDate>Thu, 13 Feb 2025 08:00 +0000</pubDate>
+      <enclosure url="https://example.com/itunes/audio/episode-2.m4a" length="52340000" type="audio/x-m4a" />
+      <itunes:title>Fallbacks and Defaults</itunes:title>
+      <itunes:author>Example Media Collective</itunes:author>
+      <itunes:subtitle></itunes:subtitle>
+      <itunes:summary>
+        <![CDATA[<p>An itunes:summary delivered as CDATA that is indented away from its own tags, so the parser sees leading and trailing whitespace around the payload.</p>]]>
+      </itunes:summary>
+      <itunes:duration>53:08</itunes:duration>
+      <itunes:episodeType>full</itunes:episodeType>
+      <itunes:episode>2</itunes:episode>
+      <itunes:season>1</itunes:season>
+      <itunes:explicit>clean</itunes:explicit>
+      <itunes:image href="https://example.com/itunes/artwork/episode-2.jpg"/>
+    </item>
+    <item>
+      <title>Episode 3: Artwork Per Episode</title>
+      <link>https://example.com/itunes/3</link>
+      <description/>
+      <content:encoded>
+        <![CDATA[<p>An episode whose description element is empty and self-closing, so content:encoded is the only prose available.</p> <h5><a href="https://example.com/itunes/notes/3" target="_blank">Show notes for episode three</a></h5>]]>
+      </content:encoded>
+      <guid>https://example.com/itunes/3</guid>
+      <pubDate>Wed, 19 Feb 2025 22:45:00 +0000</pubDate>
+      <author>editor@example.com (Example Media Collective)</author>
+      <enclosure url="https://example.com/itunes/audio/episode-3.mp3" type="audio/mp3" length="38900000"/>
+      <itunes:title>Artwork Per Episode</itunes:title>
+      <itunes:author>Example Media Collective</itunes:author>
+      <itunes:duration>01:05:00</itunes:duration>
+      <itunes:episodeType>bonus</itunes:episodeType>
+      <itunes:episode>3</itunes:episode>
+      <itunes:season>1</itunes:season>
+      <itunes:keywords>example,bonus,artwork</itunes:keywords>
+      <itunes:explicit>false</itunes:explicit>
+      <itunes:image href="https://example.com/itunes/artwork/episode-3.jpg"/>
+    </item>
+  </channel>
+</rss>

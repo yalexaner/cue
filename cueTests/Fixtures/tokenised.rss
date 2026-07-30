@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+  <channel>
+	<title>Пример Закрытого Фида</title>
+	<link>https://example.com/feed/private?token=REDACTED_TEST_TOKEN</link>
+	<atom:link href="https://example.com/feed/private?token=REDACTED_TEST_TOKEN" rel="self" type="application/rss+xml"/>
+	<language>ru</language>
+	<copyright>Creative Commons - Attribution, Noncommercial, No Derivative Works 3.0 License.</copyright>
+	<itunes:author>Пример Приватной Студии</itunes:author>
+	<itunes:subtitle>Бонусные выпуски для подписчиков - импровизации на выдуманные темы</itunes:subtitle>
+	<description>Закрытый фид для подписчиков, где и адрес фида, и адреса вложений несут предварительно подписанный токен. Все адреса в этом файле — заглушки.</description>
+	<itunes:explicit>no</itunes:explicit>
+	<itunes:summary>Еженедельные бонусные выпуски. Каждый адрес в этой фикстуре — заглушка.</itunes:summary>
+	<itunes:owner>
+		<itunes:name>Пример Приватной Студии</itunes:name>
+		<itunes:email>owner@example.com</itunes:email>
+	</itunes:owner>
+
+	<itunes:image href="https://example.com/private/artwork.jpg" />
+
+	<itunes:category text="Technology"/>
+	<itunes:category text="News"><itunes:category text="Tech News"/></itunes:category>
+
+	<itunes:keywords>бонус,подкаст,пример,закрытый,russian</itunes:keywords>
+	<lastBuildDate>Sat, 10 May 2025 07:00:00 GMT</lastBuildDate>
+	<item>
+		<title>Бонус 1: За Стеной Оплаты</title>
+		<description><![CDATA[00:00:00 Вступление<br>
+00:04:15 <a href="https://example.com/private/notes/1">Первая тема выпуска</a><br>
+00:22:09 <a href="https://example.com/private/notes/1#second">Вторая тема выпуска</a>
+<p><img src="https://example.com/private/artwork/bonus-1.jpg" alt="" /></p>
+
+
+
+<p><a href="https://example.com/private/audio/bonus-1.mp3?token=REDACTED_TEST_TOKEN">аудио</a> &bull; <a href="https://example.com/private/chat/bonus-1.html">лог чата</a>
+<audio src="https://example.com/private/audio/bonus-1.mp3?token=REDACTED_TEST_TOKEN" preload="none"></audio></p>]]></description>
+		<link>https://example.com/private/1?token=REDACTED_TEST_TOKEN</link>
+		<guid>https://example.com/private/2025/05/08//bonus-1/</guid>
+		<pubDate>Thu, 08 May 2025 07:00:00 UTC</pubDate>
+		<itunes:author>Пример Приватной Студии</itunes:author>
+		<itunes:summary><![CDATA[<p><img src="https://example.com/private/artwork/bonus-1.jpg" alt="" /></p>
+
+<ul>
+<li>Вступление - <em>00:00:00</em>.</li>
+<li><a href="https://example.com/private/notes/1">Первая тема выпуска</a> - <em>00:04:15</em>.</li>
+<li><a href="https://example.com/private/notes/1#second">Вторая тема выпуска</a> - <em>00:22:09</em>.</li>
+</ul>]]></itunes:summary>
+		<itunes:image href="https://example.com/private/artwork/bonus-1.jpg" />
+		<enclosure url="https://example.com/private/audio/bonus-1.mp3?token=REDACTED_TEST_TOKEN" type="audio/mp3" length="30100000" />
+		<author>owner@example.com (Пример Приватной Студии)</author>
+		<itunes:explicit>no</itunes:explicit>
+		<itunes:duration>31:20</itunes:duration>
+		<itunes:subtitle>Вступление - 00:00:00. Первая тема выпуска - 00:04:15. Вторая тема выпуска - 00:22:09.</itunes:subtitle>
+		<itunes:keywords>бонус,подкаст,пример,закрытый,russian</itunes:keywords>
+	</item>
+	<item>
+		<title>Бонус 2: Всё Ещё За Стеной Оплаты</title>
+		<description><![CDATA[00:00:00 Вступление<br>
+00:11:02 <a href="https://example.com/private/notes/2">Тема, в названии которой есть &amp; и &laquo;кавычки&raquo;</a><br>
+00:19:44 <a href="https://example.com/private/notes/2#third">Заключение</a>]]></description>
+		<link>https://example.com/private/2?token=REDACTED_TEST_TOKEN</link>
+		<guid>https://example.com/private/2025/05/09//bonus-2/</guid>
+		<pubDate>Fri, 09 May 2025 19:05 +0000</pubDate>
+		<itunes:author>Пример Приватной Студии</itunes:author>
+		<itunes:summary>Второй бонусный выпуск. У этого элемента нет itunes:duration, поэтому длительность придётся брать из другого места или считать её отсутствующей.</itunes:summary>
+		<enclosure url="https://example.com/private/audio/bonus-2.mp3?token=REDACTED_TEST_TOKEN" type="audio/mpeg" length="27400000" />
+		<author>owner@example.com (Пример Приватной Студии)</author>
+		<itunes:explicit>no</itunes:explicit>
+		<itunes:keywords>бонус,подкаст,пример,закрытый,russian</itunes:keywords>
+	</item>
+  </channel>
+</rss>

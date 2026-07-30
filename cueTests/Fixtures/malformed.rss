@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Truncated Example Feed</title>
+    <link>https://example.com/truncated</link>
+    <description>This feed starts out valid and then stops mid-tag, so XMLParser must report an error.</description>
+    <language>en-us</language>
+    <itunes:author>Example Broken Broadcasting</itunes:author>
+    <itunes:category text="Technology"/>
+    <itunes:category text="News">
+      <itunes:category text="Tech News"/>
+    </itunes:category>
+    <pubDate>Mon, 02 Jun 2025 10:00:00 GMT</pubDate>
+    <lastBuildDate>Mon, 02 Jun 2025 10:00:00 GMT</lastBuildDate>
+    <item>
+      <title><![CDATA[Episode 1: This One Is Fine]]></title>
+      <description><![CDATA[<p>A complete item before the truncation point, with an &#8217;entity&#8217; and an <a href="https://example.com/truncated/notes/1">inline link</a>.</p>]]></description>
+      <content:encoded><![CDATA[<p>Long-form notes for the one episode that parses.</p>]]></content:encoded>
+      <guid>https://example.com/truncated/1</guid>
+      <pubDate>Mon, 02 Jun 2025 10:00:00 EDT</pubDate>
+      <author>editor@example.com (Example Broken Broadcasting)</author>
+      <enclosure url="https://example.com/truncated/audio/episode-1.mp3" length="19800000" type="audio/mp3"/>
+      <itunes:episodeType>full</itunes:episodeType>
+      <itunes:duration>1:04:21</itunes:duration>
+    </item>
+    <item>
+      <title>Episode 2: This One Is Cut Off</title>
+      <description>The document ends inside the enclosure tag below.</description>
+      <guid isPermaLink="false">truncated-example-0002</guid>
+      <pubDate>Tue, 03 Jun 2025 10:00 +0000</pubDate>
+      <enclosure url="https://example.com/truncated/audio/episode-2.mp3" type="audio/mp

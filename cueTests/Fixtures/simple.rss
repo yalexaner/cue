@@ -1,0 +1,38 @@
+<rss version="2.0">
+  <channel>
+    <title>Simple Example Podcast</title>
+    <link>https://example.com/simple</link>
+    <description>A minimal RSS 2.0 podcast feed with three episodes and no itunes namespace. The document deliberately has no XML declaration.</description>
+    <language>en-us</language>
+    <copyright>Copyright 2025 Simple Example Media</copyright>
+    <generator>Example Feed Generator</generator>
+    <managingEditor>editor@example.com (Simple Example Editor)</managingEditor>
+    <pubDate>Mon, 06 Jan 2025 09:00:00 GMT</pubDate>
+    <lastBuildDate>Mon, 06 Jan 2025 09:00:00 GMT</lastBuildDate>
+    <item>
+      <title>Episode 1: Getting Started</title>
+      <link>https://example.com/simple/1</link>
+      <description>The first episode of the simple example podcast.</description>
+      <guid isPermaLink="false">simple-example-0001</guid>
+      <pubDate>Mon, 06 Jan 2025 09:00:00 GMT</pubDate>
+      <author>editor@example.com (Simple Example Editor)</author>
+      <enclosure url="https://example.com/simple/audio/episode-1.mp3" type="audio/mpeg" length="12345678"/>
+    </item>
+    <item>
+      <title>Episode 2: Second Steps</title>
+      <link>https://example.com/simple/2</link>
+      <description/>
+      <guid isPermaLink="true">http://example.com/simple/2</guid>
+      <pubDate>Fri, 3 Jan 2025 19:14:19 EST</pubDate>
+      <enclosure url="https://example.com/simple/audio/episode-2.mp3" length="23456789" type="audio/mp3" />
+    </item>
+    <item>
+      <title>Episode 3: Third Time</title>
+      <link>https://example.com/simple/3</link>
+      <description>The third episode of the simple example podcast. Its guid carries no isPermaLink attribute at all and its enclosure reports a zero length.</description>
+      <guid>https://example.com/simple/3</guid>
+      <pubDate>Tue, 21 Jan 2025 17:30:45 -0400</pubDate>
+      <enclosure url="https://example.com/simple/audio/episode-3.mp3" type="audio/mpeg" length="0"/>
+    </item>
+  </channel>
+</rss>

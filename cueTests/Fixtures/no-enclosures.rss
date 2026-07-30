@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:sy="http://purl.org/rss/1.0/modules/syndication/" xmlns:admin="http://webns.net/mvcb/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0">
+  <channel>
+    <title>Example Newsroom Headlines</title>
+    <link>https://example.org/news</link>
+    <atom:link href="https://example.org/news/feed.rss" rel="self" type="application/rss+xml"/>
+    <description>A text-only news feed. No item carries an enclosure, so a podcast parser must skip every item instead of crashing. Several namespaces are declared here and never used, exactly as real generators emit them.</description>
+    <language>en-us</language>
+    <generator>Example Newsroom CMS</generator>
+    <managingEditor>newsdesk@example.org (Example Newsroom)</managingEditor>
+    <pubDate>Wed, 09 Jul 2025 14:20:00 GMT</pubDate>
+    <lastBuildDate>Wed, 09 Jul 2025 14:20:00 GMT</lastBuildDate>
+    <item>
+      <title>Council approves the new bicycle bridge</title>
+      <link>https://example.org/news/bicycle-bridge</link>
+      <description>The vote passed after a two-hour session, with the chair&#39;s casting vote &amp; a &quot;spirited&quot; public comment period.</description>
+      <content:encoded><![CDATA[<p>The vote passed after a two-hour session.</p>
+
+<p>Read the <a href="https://example.org/news/bicycle-bridge#minutes">full minutes</a>.</p>]]></content:encoded>
+      <guid isPermaLink="true">http://example.org/news/bicycle-bridge</guid>
+      <pubDate>Mon, 07 Jul 2025 08:15:00 GMT</pubDate>
+      <author>newsdesk@example.org (Example Newsroom)</author>
+    </item>
+    <item>
+      <title>Library extends its summer opening hours</title>
+      <link>https://example.org/news/library-hours</link>
+      <description/>
+      <guid isPermaLink="true">https://example.org/news/library-hours</guid>
+      <pubDate>Tue, 8 Jul 2025 11:40:00 EDT</pubDate>
+    </item>
+    <item>
+      <title>Ferry timetable changes from next month</title>
+      <link>https://example.org/news/ferry-timetable</link>
+      <description>Two additional evening crossings have been added.</description>
+      <guid>https://example.org/news/ferry-timetable</guid>
+      <pubDate>Wed, 09 Jul 2025 14:05:30 +0000</pubDate>
+    </item>
+  </channel>
+</rss>

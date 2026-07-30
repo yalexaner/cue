@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="/feed.xsl"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>Duration Formats Example</title>
+    <link>https://example.org/durations</link>
+    <description>Every itunes:duration shape a tolerant parser has to accept, plus one episode with no duration at all, plus enclosure length quirks.</description>
+    <language>en-us</language>
+    <itunes:author>Example Duration Lab</itunes:author>
+    <itunes:image href="https://example.org/durations/artwork.jpg"/>
+    <itunes:type>episodic</itunes:type>
+    <pubDate>Fri, 04 Apr 2025 06:00:00 GMT</pubDate>
+    <lastBuildDate>Fri, 04 Apr 2025 06:00:00 GMT</lastBuildDate>
+    <item>
+      <title>Seconds only</title>
+      <description>itunes:duration is bare seconds.</description>
+      <guid isPermaLink="false">durations-example-ss</guid>
+      <pubDate>Tue, 01 Apr 2025 06:00:00 GMT</pubDate>
+      <enclosure url="https://example.org/durations/audio/seconds-only.mp3" type="audio/mpeg" length="720000"/>
+      <itunes:duration>45</itunes:duration>
+    </item>
+    <item>
+      <title>Bare seconds, feature length</title>
+      <description>itunes:duration is a four- or five-digit second count rather than a clock string.</description>
+      <guid isPermaLink="false">durations-example-bare-seconds</guid>
+      <pubDate>Tue, 01 Apr 2025 18:30:00 -0400</pubDate>
+      <enclosure url="https://example.org/durations/audio/bare-seconds.mp3" length="69700000" type="audio/mp3"/>
+      <itunes:duration>10584</itunes:duration>
+    </item>
+    <item>
+      <title>Minutes and seconds</title>
+      <description>itunes:duration is MM:SS.</description>
+      <guid isPermaLink="false">durations-example-mmss</guid>
+      <pubDate>Wed, 02 Apr 2025 06:00 +0000</pubDate>
+      <enclosure url="https://example.org/durations/audio/minutes-seconds.mp3" type="audio/mpeg" length="12060000"/>
+      <itunes:duration>12:34</itunes:duration>
+    </item>
+    <item>
+      <title>Single-digit hour</title>
+      <description>itunes:duration is H:MM:SS with no leading zero on the hour.</description>
+      <guid isPermaLink="false">durations-example-hmmss</guid>
+      <pubDate>Wed, 02 Apr 2025 22:45:00 -0500</pubDate>
+      <enclosure url="https://example.org/durations/audio/single-digit-hour.mp3" type="audio/mpeg"/>
+      <itunes:duration>1:03:33</itunes:duration>
+    </item>
+    <item>
+      <title>Hours, minutes and seconds</title>
+      <description>itunes:duration is HH:MM:SS.</description>
+      <guid>https://example.org/durations/hours-minutes-seconds</guid>
+      <pubDate>Thu, 03 Apr 2025 18:15:30 UTC</pubDate>
+      <enclosure url="https://example.org/durations/audio/hours-minutes-seconds.mp3" type="audio/mpeg" length="59400000"/>
+      <itunes:duration>01:02:03</itunes:duration>
+    </item>
+    <item>
+      <title>No duration element</title>
+      <description>This item deliberately omits itunes:duration and reports a zero-byte enclosure.</description>
+      <guid isPermaLink="false">durations-example-missing</guid>
+      <pubDate>Fri, 04 Apr 2025 06:00:00 GMT</pubDate>
+      <enclosure url="https://example.org/durations/audio/no-duration.mp3" type="audio/mpeg" length="0"/>
+    </item>
+  </channel>
+</rss>
