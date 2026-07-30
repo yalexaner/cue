@@ -22,6 +22,9 @@ just ipa     # unsigned device .ipa in build/
 
 ## Development
 
+Agents read `AGENTS.md` before working — it carries the command surface, the
+frozen project file rule, and the spec invariants that must never be violated.
+
 Lint and format tooling (`swift-format` ships with Xcode):
 
 ```sh
