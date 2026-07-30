@@ -28,4 +28,4 @@ jobs:
         with:
           name: cue-ipa-${{ steps.vars.outputs.sha_short }}
           path: build/cue.ipa
-          retention-days: 14
+          retention-days: 1

@@ -10,6 +10,7 @@ concurrency:
 
 env:
   SWIFTLINT_VERSION: 0.65.0
+  JUST_VERSION: 1.57.0
 
 jobs:
   checks:
@@ -24,6 +25,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install just
+        run: |
+          curl -fsSL -o just.tar.gz \
+            "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          mkdir -p just-bin && tar -xzf just.tar.gz -C just-bin just
+          echo "$PWD/just-bin" >> "$GITHUB_PATH"
+
       - name: Install SwiftLint
         run: |
           curl -fsSL -o swiftlint_linux.zip \
@@ -33,7 +41,7 @@ jobs:
           echo "$PWD/swiftlint-bin" >> "$GITHUB_PATH"
 
       - name: Lint
-        run: swiftlint lint --strict
+        run: just lint
 
   build-test:
     runs-on: macos-26
@@ -53,3 +61,6 @@ jobs:
 
       - name: Test
         run: just test
+
+      - name: Format check
+        run: just format-check
