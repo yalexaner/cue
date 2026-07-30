@@ -75,6 +75,23 @@ Two more that follow from the same design and are easy to break by accident:
   Never read fixtures from a path on disk.
 - Every step must leave `just build` and `just test` green.
 
+## CodeRabbit (advisory reviewer)
+
+- Open every PR as a **draft**; mark it ready for review only when CI is green.
+  The ready transition triggers CodeRabbit's one automatic review, so the
+  review lands on passing, final code instead of burning quota on red branches.
+- Act on findings through their `Prompt for AI Agents` blocks: verify each
+  against current code, fix what is still valid, skip the rest with a one-line
+  reason. Request a re-review with `@coderabbitai review` only after the branch
+  is final again.
+- Never invoke `@coderabbitai autofix`, docstring/test generation, or any
+  walkthrough checkbox that writes to the branch — those exercise the app's
+  write permission and are prohibited here.
+- Never put `@coderabbitai ignore` or `@coderabbitai pause` in a PR
+  description, and never modify `.coderabbit.yaml` in an ordinary PR (CI
+  guards both; config changes need the `coderabbit-config-change` label from a
+  human).
+
 ## Workflow
 
 - One roadmap step per pull request, one commit per step unless the step says

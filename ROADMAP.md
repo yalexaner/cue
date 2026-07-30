@@ -13,7 +13,7 @@ step to be verifiable.
 - One step per pull request. One commit per step unless the step says otherwise.
 - Every step must leave `just build` and `just test` green. A step that cannot is
   split.
-- Steps 0.1–0.8 are infrastructure. Steps 1–10 are the app.
+- Steps 0.1–0.9 are infrastructure. Steps 1–10 are the app.
 - Every step is headless. The Xcode GUI is never required; the project file is
   authored once in step 0.2 and frozen afterwards.
 
@@ -374,6 +374,77 @@ Contents:
 **Acceptance.** File exists and is referenced from the README.
 
 **Commit.** `docs: agent conventions`
+
+---
+
+## 0.9 CodeRabbit as an advisory second reviewer
+
+**Goal.** A second, non-human opinion on every PR — configured before its first
+review, and structurally unable to gate a merge. All PRs here are LLM-authored,
+so the value is the `🤖 Prompt for AI Agents` block on each finding: it turns a
+review comment into a work item without the human transcribing it. The hard spec
+invariants stay enforced in CI. Path instructions are guidance, never a gate.
+
+**Files.** `.coderabbit.yaml`, `.github/workflows/ci.yml`
+
+**Tasks.**
+
+1. `.coderabbit.yaml` at the repository root — nowhere else is read. The
+   non-default choices that matter: `profile: assertive`,
+   `request_changes_workflow: false`, `slop_detection.enabled: false` (its
+   default would annotate every PR in this repo), `enable_prompt_for_ai_agents:
+   true`, `chat.allow_non_org_members: false` (defaults to *true* on public
+   repos), `auto_review.auto_incremental_review: false` (the rate-limit lever —
+   agent fixup pushes must not each burn an hourly review unit), walkthrough
+   noise off (poem, sequence diagrams, fortune, effort estimate),
+   `tools.swiftlint.enabled: false` (CI owns it), and `path_instructions`
+   restating the spec invariants for `**/*.swift` and for the test tree.
+2. A CI guard step in the `checks` job, `pull_request` only, dependency-free
+   shell. It fails when the PR diff touches `.coderabbit.yaml` without the
+   human-applied `coderabbit-config-change` label, or when the PR description
+   contains `@coderabbitai ignore` / `@coderabbitai pause`. CodeRabbit reads its
+   config from the branch under review, so without this guard a PR can weaken
+   the reviewer meant to catch it. `.github/workflows` is the right place: the
+   app holds no Workflows permission and cannot edit it.
+3. Owner-side, by hand and once: install the GitHub App with **Only select
+   repositories → `cue`**; sign in at `app.coderabbit.ai` (a separate OAuth
+   grant); confirm the tier on the first PR walkthrough and with
+   `@coderabbitai rate limit`; run `@coderabbitai configuration` on the first PR
+   to verify the committed file actually wins. Add **no** CodeRabbit check to
+   branch protection — the app holds `checks: write`.
+4. Owner-side, Organization Settings → **Global Overrides** (priority 1, beats
+   the repository file): pin `auto_review.enabled`, `slop_detection.enabled`,
+   and `chat.allow_non_org_members`. This is the only structural defence against
+   an agent editing the reviewer's own config.
+5. Agent rules, already in `AGENTS.md`'s workflow section: re-review explicitly
+   with `@coderabbitai review` after CI is green (incremental auto-review is
+   off); consume the `Prompt for AI Agents` block, fix what is still valid, and
+   reply on the thread with a one-line reason for anything skipped — those
+   replies become repo-scoped Learnings. Never invoke `@coderabbitai autofix`,
+   `generate docstrings`, `fix-ci` or `resolve merge conflict`, and never tick a
+   walkthrough checkbox: those are the only paths by which the app's
+   `contents: write` permission touches this repo.
+6. Log every finding, per PR, as `real-bug` / `spec-violation` / `nit` / `wrong`.
+   Revisit thresholds over the first 10 PRs: **uninstall** if `wrong` exceeds 30%
+   of findings, if `real-bug` + `spec-violation` is zero, or if PRs routinely
+   wait on the OSS hourly review limit (there is no overflow to buy).
+   **Downgrade** `profile: assertive` → `quiet` first if `nit` + `wrong` exceeds
+   ~50% while `real-bug` is non-zero; the poem, the verbosity and the vendor's
+   press are not reasons to remove it.
+
+**Acceptance.** CodeRabbit reviews a real PR and the review shows the config took
+effect: no slop-detection annotation, no poem or sequence diagram, a collapsed
+walkthrough, and a `🤖 Prompt for AI Agents` block on each inline finding;
+`@coderabbitai configuration` echoes the committed values. The draft flow is
+verified: a draft PR receives no review, and marking it ready (with CI green)
+triggers exactly one automatic review; a subsequent push triggers none. The guard is
+red-tested both ways: a PR touching `.coderabbit.yaml` without the label fails
+`checks` and passes once the label is applied, and a PR whose description
+contains `@coderabbitai pause` fails. This step's own PR adds `.coderabbit.yaml`,
+so it carries the `coderabbit-config-change` label — that is the intended
+override, not a workaround.
+
+**Commit.** `chore: coderabbit configuration`
 
 ---
 

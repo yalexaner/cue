@@ -20,6 +20,51 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Guard CodeRabbit configuration
+        if: github.event_name == 'pull_request'
+        env:
+          OVERRIDE_LABEL: coderabbit-config-change
+        run: |
+          set -euo pipefail
+
+          failed=0
+
+          # (a) .coderabbit.yaml must not change inside an ordinary PR.
+          touched=$(git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" -- .coderabbit.yaml)
+          if [ -n "$touched" ]; then
+            labels=$(jq -r '.pull_request.labels[].name' "$GITHUB_EVENT_PATH")
+            if printf '%s\n' "$labels" | grep -Fxq "$OVERRIDE_LABEL"; then
+              echo "note: .coderabbit.yaml is modified, and the '$OVERRIDE_LABEL' label is present — allowed."
+            else
+              echo "::error file=.coderabbit.yaml::This PR modifies .coderabbit.yaml without the '$OVERRIDE_LABEL' label."
+              echo "CodeRabbit reads .coderabbit.yaml from the branch under review, so a PR can weaken"
+              echo "the reviewer meant to catch it — a path filter, a deleted path instruction or a"
+              echo "flipped switch takes effect on that same PR. That is a config-from-branch integrity"
+              echo "hole, and it is why the file is guarded here in .github/workflows (which the"
+              echo "CodeRabbit app has no permission to modify)."
+              echo "If the change is intended, a human applies the '$OVERRIDE_LABEL' label and re-runs."
+              failed=1
+            fi
+          fi
+
+          # (b) the PR body must not carry a CodeRabbit kill-switch.
+          body=$(jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH" | tr '[:upper:]' '[:lower:]')
+          for phrase in "@coderabbitai ignore" "@coderabbitai pause"; do
+            case "$body" in
+              *"$phrase"*)
+                echo "::error::PR description contains '$phrase', which disables the CodeRabbit review for this PR."
+                echo "The reviewer is advisory, but silencing it from inside the PR it is meant to review"
+                echo "defeats the point. Remove the directive from the description and re-run."
+                failed=1
+                ;;
+            esac
+          done
+
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+          echo "CodeRabbit configuration guard: OK"
+
       - name: Scan for secrets
         uses: gitleaks/gitleaks-action@v2
         env:
