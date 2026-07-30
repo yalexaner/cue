@@ -1,5 +1,7 @@
 # cue
 
+[![CI](https://github.com/yalexaner/cue/actions/workflows/ci.yml/badge.svg)](https://github.com/yalexaner/cue/actions/workflows/ci.yml)
+
 A single-user iOS podcast client built around one idea: **playback position is
 never lost**. Every listening session is recorded append-only; falling asleep
 mid-episode never destroys where you actually were.
