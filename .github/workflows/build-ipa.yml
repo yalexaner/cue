@@ -1,0 +1,31 @@
+name: Build IPA
+on:
+  workflow_dispatch:
+
+jobs:
+  ipa:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.6.app
+          xcodebuild -version
+
+      - name: Install just
+        run: brew install just
+
+      - name: Build IPA
+        run: just ipa
+
+      - name: Short commit sha
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: cue-ipa-${{ steps.vars.outputs.sha_short }}
+          path: build/cue.ipa
+          retention-days: 14
