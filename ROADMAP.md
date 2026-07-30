@@ -293,7 +293,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [master]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -333,7 +333,7 @@ Notes.
 - SwiftLint on Linux needs a different install path than `brew`; either move the
   lint job to macOS or use the official SwiftLint container image.
 
-**Branch protection.** Require both jobs to pass before merge to `main`.
+**Branch protection.** Require both jobs to pass before merge to `master`.
 
 **README badges.** CI status is the only one carrying information. License,
 platform, and Swift version are acceptable garnish. Do not add a coverage badge
