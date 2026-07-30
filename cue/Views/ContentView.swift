@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ContentView: View {
     var body: some View {
-        Text("cue")
+        let x: Int? = 1
+        _ = x!
+        return Text("cue")
     }
 }
