@@ -456,22 +456,25 @@ override, not a workaround.
 
 **Files.** `Models/Podcast.swift`, `Models/Episode.swift`,
 `Models/PlaybackSession.swift`, `Storage/EpisodeStore.swift`,
-`App/cueApp.swift` (attach `.modelContainer`)
+`App/CueApp.swift` (attach `.modelContainer`)
 
 **Tasks.**
 
 1. Implement the three models exactly as specified in spec §4, including the
    `#Unique` constraints and cascade rules.
-2. `EpisodeStore` with `episodesDirectory()` per spec §5 — creates the directory,
-   sets `isExcludedFromBackup`, and resolves a relative filename to an absolute
-   URL on demand.
+2. `EpisodeStore` per spec §5, splitting resolution from provisioning:
+   `episodesDirectory()` composes the path and resolves a relative filename to an
+   absolute URL on demand without touching disk; `prepareEpisodesDirectory()`
+   creates the directory and sets `isExcludedFromBackup`, and is called once at
+   launch from `CueApp.init()`.
 3. Derived helpers: `Episode.duration`, `Episode.currentPosition`,
    `Episode.isDownloaded` (checks disk, not just the column).
 
 **Acceptance.** Tests: inserting and fetching each model round-trips; deleting a
 `Podcast` cascades its `Episode` rows; deleting an `Episode` cascades its
-sessions; `episodesDirectory()` creates the directory and the backup-exclusion
-flag reads back as set; `isDownloaded` is false when the column is populated but
+sessions; `prepareEpisodesDirectory()` creates the directory and the
+backup-exclusion flag reads back as set, while `episodesDirectory()` leaves the
+file system untouched; `isDownloaded` is false when the column is populated but
 the file is absent.
 
 **Commit.** `feat: swiftdata models and episode storage paths`

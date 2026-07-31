@@ -46,6 +46,35 @@ These are not preferences. Each one is a bug being designed out.
   absolute URL is rebuilt at every access from `episodesDirectory()`. The
   container path contains a UUID that changes on reinstall and restore, so
   persisting an absolute path guarantees breakage. (spec §5)
+  Resolution and existence checks go through `EpisodeStore` —
+  `url(forRelativeFilename:)` and `fileExists(forRelativeFilename:)`. Never
+  compose an episode path by hand; the store is the single place that rejects
+  names which would resolve outside `Episodes/`. `EpisodeStore` is a cheap
+  struct constructed at the call site — no shared singleton.
+- **Resolving a path never touches the file system.** `episodesDirectory()`
+  composes only; `prepareEpisodesDirectory()` is the sole mutating entry point
+  (creates the directory, sets `isExcludedFromBackup`). A read such as
+  `isDownloaded` must not create directories as a side effect. Because nothing
+  else provisions, `CueApp.init()` calls `prepareEpisodesDirectory()` once at
+  launch — spec §5's "created on first launch". The download path must call it
+  again before writing rather than assume launch succeeded.
+- **Storage errors are never answered as "not downloaded".**
+  `Episode.isDownloaded(in:)` is a throwing *method*, not the property spec §4
+  names — the disk check needs an `EpisodeStore`, and it cannot appear in a
+  SwiftData `#Predicate`, so the Downloads view filters in memory. Callers must
+  propagate the error: the reconciliation sweep clears download state on a
+  `false`, so treating "cannot tell" as "absent" would wipe the library.
+- **Refresh fetches before it writes.** `#Unique` makes a conflicting
+  `context.insert` an upsert that overwrites *every* scalar with the new
+  instance's value, including defaults — it clears `localFilename`,
+  `downloadedAt`, `isPlayed` and `playedAt`. Match on `guid` with a fetch and
+  mutate the allowed metadata fields; never blind-insert. The same holds for
+  `Podcast.feedURL` — re-adding a subscribed feed wipes its author, summary,
+  artwork and `addedAt`. Pinned by
+  `uniqueGUIDUpsertOverwritesDownloadAndPlayedState` and
+  `uniqueFeedURLUpsertOverwritesPodcastMetadata`. Note also that `guid`
+  uniqueness is store-wide, not per podcast
+  (`guidUniquenessIsGlobalNotPerPodcast`).
 - **The playback path performs no network request and no reachability check.**
   `AVPlayerItem` is built from the local file URL. (spec §8)
 - **Lock-screen scrubber and skip commands stay disabled.**
@@ -73,6 +102,15 @@ Two more that follow from the same design and are easy to break by accident:
 - Fixtures live in `cueTests/Fixtures/` and load from the test bundle via
   `Bundle(for:)` with a private marker class — see `cueTests/SmokeTests.swift`.
   Never read fixtures from a path on disk.
+- Model tests build a fresh in-memory container per test:
+  `ModelConfiguration(isStoredInMemoryOnly: true)` →
+  `ModelContainer(for:configurations:)` → `ModelContext`. Never share one across
+  tests. Suites touching SwiftData are `@MainActor`.
+- Never let a test touch the real Application Support. Use
+  `withTemporaryBase` (`cueTests/TemporaryDirectory.swift`) and construct
+  `EpisodeStore(baseDirectory:)` against the directory it hands you.
+- Inside a throwing closure, write `try #expect(…)` — `#expect(try …)` fails to
+  compile there, though it works at the top level of a `throws` test function.
 - Every step must leave `just build` and `just test` green.
 
 ## CodeRabbit (advisory reviewer)
