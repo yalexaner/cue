@@ -1,0 +1,298 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit is an ADVISORY second reviewer. It is never a merge gate: the hard
+# spec invariants are enforced by CI (swiftlint, gitleaks, xcodebuild), because
+# CodeRabbit cannot modify .github/workflows but can read this file from the
+# branch under review. See ROADMAP.md 0.9.
+
+language: "en-US"
+
+# Pinned off deliberately: there are reports of beta features appearing without
+# being asked for. Setting it explicitly is safe either way.
+early_access: false
+
+# Hard ceiling of 250 characters (this is 233). Used as a severity protocol, not
+# for invariants — those live in reviews.path_instructions below.
+tone_instructions: >-
+  Be direct and brief. No praise, no emojis. Prefix each comment with one of:
+  critical / important / suggestion / nit. Cite the invariant or line you rely
+  on. If code outside the diff may already handle it, say so instead of asserting.
+
+reviews:
+  # "more feedback (which may feel nitpicky)". Chosen because no human wrote this
+  # code and an agent — not the human — pays the cost of acting on a nit.
+  # Downgrade to "quiet" if nit + wrong exceeds ~50% of findings (ROADMAP 0.9).
+  profile: "assertive"
+
+  # Advisory only. CodeRabbit must never be able to block or unblock a merge.
+  request_changes_workflow: false
+
+  # 100% of PRs here are LLM-authored; this default would annotate every one.
+  slop_detection:
+    enabled: false
+
+  # --- Summary / walkthrough noise ---
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true # keep it out of the PR description
+  changed_files_summary: false
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  in_progress_fortune: false
+  poem: false # schema default is false but has been observed enabled on live
+  # repos, so it is pinned explicitly here
+  collapse_walkthrough: true
+  review_status: true
+  review_details: false
+  related_issues: false
+  related_prs: false
+  suggested_labels: false
+  suggested_reviewers: false
+  auto_apply_labels: false
+  auto_assign_reviewers: false
+
+  # Posts a commit status. Leave it — but do NOT add it to required checks.
+  commit_status: true
+  fail_commit_status: false
+  abort_on_close: true
+
+  # The single most valuable output for an agent-authored repo. Keep on.
+  enable_prompt_for_ai_agents: true
+
+  # Left at the default (false = caching enabled). OSS caches are documented as
+  # NOT encrypted at rest, but this repo's code is already public, so the
+  # confidentiality argument for disabling it does not apply here. Caching
+  # expires at 7 days max and is never used for training.
+  disable_cache: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+    # THE KEY RATE-LIMIT LEVER. First review is automatic; subsequent agent
+    # fixup pushes do NOT each burn an hourly review unit. Re-review manually
+    # with `@coderabbitai review` once the branch is final and CI is green.
+    # (Whether `enabled: true` still triggers the initial review with
+    #  incremental off is INFERRED — verify on the first PR. Belt and braces:
+    #  auto_pause_after_reviewed_commits is also pinned to 1.)
+    auto_incremental_review: false
+    auto_pause_after_reviewed_commits: 1
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT REVIEW"
+    # base_branches omitted: the default branch (master) is implicitly included.
+
+  # Xcode churn. Package.resolved and *.xcworkspace/contents.xcworkspacedata are
+  # already default-ignored; these are not.
+  path_filters:
+    - "!**/*.pbxproj"
+    - "!**/*.xcscheme"
+    - "!**/*.xcassets/**"
+    - "!**/.build/**"
+
+  path_instructions:
+    - path: "**/*.swift"
+      instructions: >-
+        This is a SwiftUI + SwiftData podcast app. The following are HARD SPEC
+        INVARIANTS, not preferences. Flag any violation as `critical`, name the
+        invariant, and quote the offending line. Follow the value across renames
+        and through several function calls — a violation counts even if the
+        value is renamed or passed through helpers on the way.
+
+        1. PLAYED STATE AND DOWNLOAD STATE ARE ORTHOGONAL. `isPlayed` and
+        `localFilename` are independent; neither is ever inferred from the
+        other. Marking an episode played must not delete the file, and deleting
+        the file must not mark the episode played. Flag any code that derives,
+        defaults, infers, gates, or side-effects one from the other: marking
+        played on download completion, treating not-downloaded as not-played, a
+        single enum or Bool conflating the two, a computed property of one that
+        reads the other, or a predicate/sort/filter that assumes a correlation.
+        The Downloads list filters on file presence only, never on played state.
+
+        2. NO STORED PLAYBACK POSITION. There is no stored position field.
+        `Episode.currentPosition` is DERIVED from the session log — the
+        `endPosition` of the session with the latest `startedAt`, else 0 — and is
+        never persisted. Flag any new stored property, SwiftData model
+        attribute, UserDefaults key, file, or cache that holds a position,
+        elapsed time, progress fraction, resume point, or "last played at
+        <time>" value. Deriving from the session log at read time is correct;
+        writing a position anywhere is not.
+
+        3. THE PLAYBACK PATH PERFORMS NO NETWORK REQUESTS AND NO REACHABILITY
+        CHECKS. `AVPlayerItem` is built from the local file URL. In any code
+        reachable from starting, resuming, seeking, or advancing playback, flag
+        every URLSession, URLRequest, dataTask, URL(string:) fetch, async
+        network/HTTP client call, image or artwork fetch, feed refresh, or
+        analytics/telemetry send. Playback must operate entirely on local state
+        and local files.
+
+        4. THE LOCK-SCREEN SCRUBBER AND SKIP COMMANDS STAY DISABLED.
+        `changePlaybackPositionCommand`, `skipForwardCommand` and
+        `skipBackwardCommand` are `isEnabled = false` on purpose, so position
+        cannot be lost to a pocket touch. This is a requirement, not an
+        oversight — do not "fix" it. Flag any code enabling
+        MPRemoteCommandCenter.changePlaybackPositionCommand, setting
+        MPNowPlayingInfoPropertyElapsedPlaybackTime or
+        MPNowPlayingInfoPropertyPlaybackRate in a way that activates scrubbing,
+        or otherwise making the Now Playing timeline interactive. The in-app
+        progress slider stays enabled; only the lock-screen scrubber is disabled.
+
+        5. NO REAL FEED URLS ANYWHERE. Flag any literal http/https URL that
+        points at a real podcast feed, CDN, or hosting provider — in source,
+        tests, fixtures, previews, docs, comments, or sample data. Only
+        obviously-fake example hosts are acceptable; fixtures use
+        `https://example.com/feed?token=REDACTED_TEST_TOKEN`.
+
+        6. `localFilename` IS RELATIVE. The database stores the filename only;
+        the absolute URL is rebuilt at every access from `episodesDirectory()`.
+        The container path holds a UUID that changes on reinstall and restore,
+        so flag any code that persists an absolute path or a file URL.
+
+        Beyond the invariants: flag force unwraps and `try!` in non-test code;
+        Optional/Codable semantics where a missing key and an explicit null are
+        conflated; `decodeIfPresent(...) ?? default` that erases an invalid
+        value; SwiftData @Model mutation off the main actor; refresh logic that
+        deletes local episodes or touches `isPlayed`, `localFilename` or
+        sessions; and missing empty/error states in views. Do not comment on
+        formatting, line length, or whitespace — SwiftLint and swift-format own
+        those in CI.
+
+    - path: "cueTests/**/*.swift"
+      instructions: >-
+        Swift Testing (`@Test`, `#expect`, `#require`) — not XCTest. Flag
+        XCTest-isms in new tests: no `XCTestCase` subclasses, no `XCTAssert`.
+        Require meaningful assertions, not merely "did not crash" / non-nil
+        checks. Require both the success and the failure path where the change
+        introduces a branch. Fixtures load from the test bundle via
+        `Bundle(for:)` with a private marker class, never from a path on disk.
+        Test fixtures are subject to the same "no real feed URLs" invariant as
+        production code. Flag any test that asserts a correlation between played
+        state and download state, or that persists a playback position to set up
+        state instead of writing session-log entries.
+
+  tools:
+    # SwiftLint already runs as a required CI check. CodeRabbit documents that
+    # it auto-skips in that case, but the detection mechanism is undocumented —
+    # so be explicit rather than trusting the heuristic.
+    swiftlint:
+      enabled: false
+
+    # This key is now backed by "Betterleaks", a different engine from the
+    # gitleaks binary in CI, with no documented skip-if-already-in-CI rule.
+    # Kept deliberately as a second, differently-tuned scanner.
+    gitleaks:
+      enabled: true
+
+    # Disabled deliberately: reading failing CI logs and proposing remediation
+    # is the coding agent's own job here, and waiting for CI would delay every
+    # review by the xcodebuild run time. PRs are opened as drafts and marked
+    # ready only when CI is green (AGENTS.md), so reviews land on passing code.
+    github-checks:
+      enabled: false
+
+    # ast-grep is the deterministic route for invariants 3 and 5, and is the
+    # only mechanism that is not probabilistic. NOT ENABLED HERE: whether
+    # CodeRabbit's bundled ast-grep includes the Swift grammar is UNVERIFIED,
+    # and whether ast-grep rules are Pro-gated is disputed. Test one rule on a
+    # throwaway PR before investing.
+    # ast-grep:
+    #   essential_rules: true
+    #   rule_dirs:
+    #     - "coderabbit-rules"
+
+  pre_merge_checks:
+    # 80% docstring coverage on SwiftUI views is pure noise here.
+    docstrings:
+      mode: "off"
+    title:
+      mode: "warning"
+    description:
+      mode: "warning"
+    # No issue tracker in the loop; roadmap steps are not GitHub issues.
+    issue_assessment:
+      mode: "off"
+
+    # CUSTOM CHECKS — the deterministic pass/fail route for the invariants.
+    # LEFT COMMENTED DELIBERATELY. Two unresolved blockers:
+    #  (a) docs state custom checks are "Pro+ plan and above"; whether the OSS
+    #      grant actually includes them is UNVERIFIED;
+    #  (b) the instruction length limit is contradictory: schema says 10,000
+    #      chars, the docs' web-UI tab says 1,000.
+    # They run in a read-only sandbox with ast-grep + ripgrep + a sandboxed
+    # shell. They CANNOT run the test suite, CANNOT execute repo code, and post
+    # only into the walkthrough summary table — never inline. Start every one in
+    # `mode: warning`, as the docs recommend.
+    #
+    # custom_checks:
+    #   - name: "No stored playback position"
+    #     mode: "warning"
+    #     instructions: >-
+    #       Search the diff and the surrounding files for any persisted playback
+    #       position. FAIL if a stored property, SwiftData @Model attribute,
+    #       UserDefaults key, or on-disk cache holds a position, elapsed time,
+    #       progress fraction, or resume point. Deriving position from the
+    #       session log at read time PASSES. Report Inconclusive if you cannot
+    #       determine persistence.
+    #   - name: "No real feed URLs"
+    #     mode: "warning"
+    #     instructions: >-
+    #       ripgrep the changed files for http:// and https:// literals. FAIL on
+    #       any URL that plausibly points at a real podcast feed, CDN, or
+    #       hosting provider, in source, tests, fixtures, previews, or docs.
+    #       Obviously-fake example hosts PASS. Quote every match.
+    #   - name: "No network on the playback path"
+    #     mode: "warning"
+    #     instructions: >-
+    #       Identify code reachable from starting, resuming, seeking, or
+    #       advancing playback. FAIL if any of it references URLSession,
+    #       URLRequest, dataTask, an async HTTP client, artwork/image fetching,
+    #       feed refresh, or analytics transmission. Report the call chain.
+
+  # FINISHING TOUCHES — several default to ON and MUTATE CODE (autofix,
+  # docstrings, unit_tests, fix_ci, resolve_merge_conflict). These are the only
+  # features that exercise the app's `contents: write` permission on your
+  # branches. Disabling them is the recommendation.
+  # THE EXACT KEY NESTING FOR THIS BLOCK WAS NOT CAPTURED IN THE RESEARCH.
+  #   Do not paste it blind — confirm the path with `@coderabbitai configuration`
+  #   on the first PR, then add it. Until then the fallback holds: never invoke
+  #   `@coderabbitai autofix` and never tick the walkthrough checkboxes; all of
+  #   these are trigger-driven, not silent.
+  # finishing_touches:
+  #   docstrings:
+  #     enabled: false
+  #   unit_tests:
+  #     enabled: false
+  #   autofix:
+  #     enabled: false
+  #   fix_ci:
+  #     enabled: false
+  #   simplify:
+  #     enabled: false
+
+chat:
+  # Default is TRUE on public repos — any stranger can spend the OSS tier's
+  # 25 chat messages/hour.
+  allow_non_org_members: false
+  art: false
+  auto_reply: true
+
+knowledge_base:
+  # On a public repo 'auto' already resolves to local; be explicit.
+  learnings:
+    scope: "local"
+    approval_delay: 0 # solo repo — no second admin to wait for
+  code_guidelines:
+    enabled: true
+    # Root CLAUDE.md / AGENTS.md are auto-detected (case-sensitive) and apply to
+    # the directory they live in plus all subdirectories. Only add filePatterns
+    # if the invariants live in a file NOT on the auto-detected list, and use
+    # the object form to map it onto the source tree:
+    #
+    # filePatterns:
+    #   - files: "docs/spec.md"
+    #     applyTo: "**/*.swift"
+    #
+    # Setting filePatterns supplements the defaults; it does not replace them.
+    # NEVER list CLAUDE.md / AGENTS.md under reviews.path_instructions — the
+    #   docs flag that as a common mistake: it makes CodeRabbit review the file
+    #   as changed code instead of obeying it as a rule.
+  web_search:
+    enabled: true
