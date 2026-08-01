@@ -132,8 +132,12 @@ Two more that follow from the same design and are easy to break by accident:
 
 ## Workflow
 
-- One roadmap step per pull request, one commit per step unless the step says
-  otherwise.
+- One roadmap step per pull request. The finalizer decides the rev count by
+  content: each rev is atomic and independently green (build + tests), review
+  fixes are folded into the rev they fix, no plan artifacts or process commits.
+  Small steps naturally collapse to one rev; large steps split into 2–4
+  cohesive units.
 - Conventional commits: `<type>(<scope>): <subject>` — lowercase, imperative,
-  no trailing period. Use the commit message the roadmap step specifies.
+  no trailing period. The commit message the roadmap step specifies becomes the
+  PR title and the primary rev's message.
 - CI (`checks` and `build-test`) must pass before merge. Do not merge red.
