@@ -18,6 +18,15 @@ just format-check  # swift-format lint --strict, no writes
 
 `just --list` shows the rest (`clean`, `destinations`).
 
+Keep every collection literal on a single line. `swift-format` requires a
+trailing comma on the last element of a *multiline* collection literal, while
+SwiftLint's default `trailing_comma` rule rejects one — so a multiline array or
+dictionary cannot pass `just lint` and `just format-check` at the same time. If
+a literal will not fit in 120 columns, split it into two named single-line
+values or use a `switch` instead of a `Set` membership test. (Changing this
+means disabling one of the two rules in `.swiftlint.yml` or `.swift-format`,
+which is a project-wide decision, not a per-step workaround.)
+
 ## Project structure
 
 - New `.swift` files anywhere under `cue/` or `cueTests/` compile automatically —
@@ -82,6 +91,14 @@ These are not preferences. Each one is a bug being designed out.
   `skipBackwardCommand` are `isEnabled = false` on purpose, so position cannot
   be lost to a pocket touch. This is a requirement, not an oversight — do not
   "fix" it. The in-app progress slider stays enabled. (spec §8)
+- **Zero episodes is a failure only at the fetch boundary.**
+  `FeedParser.parse(data:)` returns a zero-episode `ParsedFeed` without
+  throwing — parsing is permissive by design, which is what satisfies the
+  roadmap's `no-enclosures.rss` → "zero episodes, no error".
+  `FeedParser.parse(data:sourceURL:)` adds `Failure.emptyFeed(sourceURL)`, and
+  that is what satisfies spec §6's "surface an error naming the URL". Every
+  caller that actually fetched the document must use the URL-aware entry; the
+  data-only entry exists for tests and for callers with no URL to name.
 - **No real feed URL enters the repository.** Not in fixtures, tests, comments,
   commit messages, or issue text. Fixtures use
   `https://example.com/feed?token=REDACTED_TEST_TOKEN`. See `docs/SECRETS.md`;
@@ -99,9 +116,10 @@ Two more that follow from the same design and are easy to break by accident:
 
 - Swift Testing (`@Test`, `#expect`), not XCTest. No `XCTestCase` subclasses,
   no `XCTAssert`.
-- Fixtures live in `cueTests/Fixtures/` and load from the test bundle via
-  `Bundle(for:)` with a private marker class — see `cueTests/SmokeTests.swift`.
-  Never read fixtures from a path on disk.
+- Fixtures live in `cueTests/Fixtures/` and load through the shared
+  `fixtureData(named:withExtension:)` helper in `cueTests/FixtureLoading.swift`,
+  which resolves the test bundle via `Bundle(for:)` with a private marker class.
+  Never read fixtures from a path on disk, and never re-declare a local loader.
 - Model tests build a fresh in-memory container per test:
   `ModelConfiguration(isStoredInMemoryOnly: true)` →
   `ModelContainer(for:configurations:)` → `ModelContext`. Never share one across
