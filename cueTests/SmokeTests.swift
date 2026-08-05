@@ -3,20 +3,6 @@ import Testing
 
 @testable import cue
 
-private final class FixtureBundleMarker {}
-
-private enum FixtureError: Error {
-    case missing(String)
-}
-
-private func fixtureData(named name: String, withExtension ext: String) throws -> Data {
-    let bundle = Bundle(for: FixtureBundleMarker.self)
-    guard let url = bundle.url(forResource: name, withExtension: ext) else {
-        throw FixtureError.missing("\(name).\(ext)")
-    }
-    return try Data(contentsOf: url)
-}
-
 struct SmokeTests {
     @Test func testableImportResolves() {
         #expect(Bool(true))
