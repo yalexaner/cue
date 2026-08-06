@@ -157,5 +157,10 @@ Two more that follow from the same design and are easy to break by accident:
   cohesive units.
 - Conventional commits: `<type>(<scope>): <subject>` — lowercase, imperative,
   no trailing period. The commit message the roadmap step specifies becomes the
-  PR title and the primary rev's message.
+  primary rev's message.
+- PR title and description are delegated to CodeRabbit: open PRs with
+  `gh pr create --draft --title "@coderabbitai"` and body `@coderabbitai summary`;
+  when its review runs, the bot replaces the title placeholder and inserts the
+  generated summary where the `@coderabbitai summary` placeholder sits in the
+  body.
 - CI (`checks` and `build-test`) must pass before merge. Do not merge red.

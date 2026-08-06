@@ -33,7 +33,7 @@ reviews:
 
   # --- Summary / walkthrough noise ---
   high_level_summary: true
-  high_level_summary_in_walkthrough: true # keep it out of the PR description
+  high_level_summary_in_walkthrough: false # summary lands in the PR description
   changed_files_summary: false
   sequence_diagrams: false
   estimate_code_review_effort: false
