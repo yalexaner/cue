@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>Refresh Example Podcast</title>
+    <link>https://example.com/refresh</link>
+    <item>
+      <title>Refresh Episode 1</title>
+      <guid isPermaLink="false">refresh-example-0001</guid>
+      <enclosure url="https://example.com/refresh/audio/episode-1.mp3" type="audio/mpeg" length="1000"/>
+    </item>
+    <item>
+      <title>Refresh Episode 2</title>
+      <guid isPermaLink="false">refresh-example-0002</guid>
+      <enclosure url="https://example.com/refresh/audio/episode-2.mp3" type="audio/mpeg" length="2000"/>
+    </item>
+  </channel>
+</rss>

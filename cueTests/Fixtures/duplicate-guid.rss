@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A feed that lists the same guid twice, with different titles. Feeds in the
+     wild do this after a botched re-publish. The second occurrence must update
+     the episode the first one produced, never insert a second row: two rows
+     sharing a guid hit the destructive `#Unique` upsert on save. -->
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>Duplicate GUID Example Podcast</title>
+    <itunes:author>Duplicate Example Studio</itunes:author>
+    <item>
+      <title>Repeated Episode (first listing)</title>
+      <guid isPermaLink="false">duplicate-example-0001</guid>
+      <pubDate>Mon, 06 Jan 2025 09:00:00 +0000</pubDate>
+      <itunes:duration>10:00</itunes:duration>
+      <enclosure url="https://example.com/duplicate/audio/repeated-a.mp3" length="1" type="audio/mpeg"/>
+    </item>
+    <item>
+      <title>Repeated Episode (second listing)</title>
+      <guid isPermaLink="false">duplicate-example-0001</guid>
+      <pubDate>Mon, 06 Jan 2025 10:00:00 +0000</pubDate>
+      <itunes:duration>20:00</itunes:duration>
+      <enclosure url="https://example.com/duplicate/audio/repeated-b.mp3" length="1" type="audio/mpeg"/>
+    </item>
+    <item>
+      <title>Ordinary Episode</title>
+      <guid isPermaLink="false">duplicate-example-0002</guid>
+      <pubDate>Mon, 06 Jan 2025 11:00:00 +0000</pubDate>
+      <enclosure url="https://example.com/duplicate/audio/ordinary.mp3" length="1" type="audio/mpeg"/>
+    </item>
+  </channel>
+</rss>

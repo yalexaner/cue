@@ -4,18 +4,6 @@ import Testing
 
 @testable import cue
 
-private let testFeedURL = "https://example.com/feed?token=REDACTED_TEST_TOKEN"
-
-@MainActor
-private func makeContext() throws -> ModelContext {
-    let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
-    let container = try ModelContainer(
-        for: Podcast.self, Episode.self, PlaybackSession.self,
-        configurations: configuration
-    )
-    return ModelContext(container)
-}
-
 @MainActor
 struct ModelTests {
     @Test func podcastRoundTrips() throws {
