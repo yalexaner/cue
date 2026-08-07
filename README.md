@@ -10,6 +10,11 @@ mid-episode never destroys where you actually were.
 - Download-then-play only; offline is the primary case.
 - iOS 26, SwiftUI, SwiftData, AVFoundation. No third-party dependencies.
 
+**Status: in development** — the bullets above describe the finished v1, not
+what runs today. Working now: subscribe to a feed by URL, browse a show's
+episodes, mark played, pull to refresh. Not built yet: downloads, playback,
+session tracking, sleep timer, OPML import. See `ROADMAP.md`.
+
 ## Build
 
 Requires Xcode 26+ and [`just`](https://github.com/casey/just).
@@ -28,7 +33,7 @@ frozen project file rule, and the spec invariants that must never be violated.
 Lint and format tooling (`swift-format` ships with Xcode):
 
 ```sh
-brew install just swiftlint
+brew install just swiftlint gitleaks
 ```
 
 ```sh
