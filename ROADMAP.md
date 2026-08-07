@@ -10,7 +10,9 @@ step to be verifiable.
 
 ## Conventions
 
-- One step per pull request. One commit per step unless the step says otherwise.
+- One step per pull request. The rev count is decided by content, per
+  `AGENTS.md`: each rev atomic and independently green, small steps collapsing
+  to one, large ones splitting into 2–4 cohesive units.
 - Every step must leave `just build` and `just test` green. A step that cannot is
   split.
 - Steps 0.1–0.9 are infrastructure. Steps 1–10 are the app.
@@ -511,7 +513,9 @@ duration formats. `malformed.rss` produces an error rather than a crash.
 **Goal.** First interactive milestone. Paste a URL, see episodes.
 
 **Files.** `Feed/FeedService.swift`, `Views/LibraryView.swift`,
-`Views/AddFeedView.swift`, `Views/PodcastDetailView.swift`
+`Views/AddFeedView.swift`, `Views/PodcastDetailView.swift` — plus whatever view
+logic those screens push out into free functions under `Views/`, which is where
+anything assertable has to live (see `AGENTS.md`).
 
 **Tasks.**
 
