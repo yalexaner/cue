@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>Refresh Example Podcast (Renamed)</title>
+    <link>https://example.com/refresh</link>
+    <description>The state of the feed after a refresh: episode 1 was corrected, episode 2 fell out of the window, episode 3 is new.</description>
+    <itunes:author>Refresh Example Studio Ltd</itunes:author>
+    <itunes:image href="https://example.com/refresh/artwork-new.jpg"/>
+    <item>
+      <title>Refresh Episode 1 (Corrected)</title>
+      <description>The corrected summary of episode 1.</description>
+      <guid isPermaLink="false">refresh-example-0001</guid>
+      <pubDate>Mon, 06 Jan 2025 11:00:00 GMT</pubDate>
+      <itunes:duration>20:00</itunes:duration>
+      <enclosure url="https://example.com/refresh/audio/episode-1-remastered.mp3" type="audio/mpeg" length="1500"/>
+    </item>
+    <item>
+      <title>Refresh Episode 3</title>
+      <description>An episode that did not exist before the refresh.</description>
+      <guid isPermaLink="false">refresh-example-0003</guid>
+      <pubDate>Wed, 08 Jan 2025 09:00:00 GMT</pubDate>
+      <enclosure url="https://example.com/refresh/audio/episode-3.mp3" type="audio/mpeg" length="3000"/>
+    </item>
+  </channel>
+</rss>

@@ -6,15 +6,6 @@ import Testing
 
 @MainActor
 struct EpisodeDerivedTests {
-    private func makeContext() throws -> ModelContext {
-        let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
-        let container = try ModelContainer(
-            for: Podcast.self, Episode.self, PlaybackSession.self,
-            configurations: configuration
-        )
-        return ModelContext(container)
-    }
-
     private func makeEpisode(in context: ModelContext, guid: String = "guid-1") -> Episode {
         let episode = Episode(
             guid: guid,
