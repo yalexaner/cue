@@ -54,6 +54,28 @@ extension Episode {
         }?.endPosition ?? 0
     }
 
+    /// Marks the episode played or unplayed (spec §4).
+    ///
+    /// Played state is orthogonal to download state: this writes `isPlayed` and
+    /// its timestamp and nothing else — marking an episode played never deletes
+    /// the file, and unmarking it never restores one. `playedAt` follows the
+    /// flag in both directions, so an unplayed episode carries no stale date.
+    func setPlayed(_ played: Bool) {
+        isPlayed = played
+        playedAt = played ? .now : nil
+    }
+
+    /// Puts the played pair back exactly as a caller found it.
+    ///
+    /// `setPlayed(_:)` cannot undo itself: it derives `playedAt` from `.now`, so
+    /// replaying the old flag would invent a new timestamp. A caller whose save
+    /// failed needs the original pair restored verbatim, and the two fields
+    /// still move together — that is the point of both methods.
+    func restorePlayed(_ played: Bool, at date: Date?) {
+        isPlayed = played
+        playedAt = date
+    }
+
     /// `localFilename` is set *and* the file is really on disk.
     ///
     /// Independent of `isPlayed`: this reads download state only, never played
