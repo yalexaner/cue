@@ -34,6 +34,14 @@ final class DownloadManager {
     /// signature.
     typealias FileTransport = @Sendable (URL) async throws -> (URL, URLResponse)
 
+    /// Reports that the work following one delivered transfer has finished.
+    ///
+    /// The session may not answer UIKit's completion handler while a delivered
+    /// outcome is still being finished — the app can be suspended mid-move.
+    /// Injected beside the transport, so a stub is paired with a no-op rather
+    /// than with accounting nothing ever incremented.
+    typealias DeliveryBarrier = @Sendable () -> Void
+
     /// What a given episode's transfer is doing right now. Absent means idle.
     enum DownloadState: Equatable {
         case downloading
@@ -70,9 +78,20 @@ final class DownloadManager {
     /// episode is the value the store is unique on.
     private(set) var states: [String: DownloadState] = [:]
 
+    /// Guids this process has already resolved through the relaunch route, so a
+    /// late `adopt` cannot mark a finished transfer as still in flight.
+    private var resolvedGUIDs: Set<String> = []
+
+    /// Which in-process transfer owns each guid, as an identity rather than a
+    /// display state. Internal for the same reason `context` and `store` are:
+    /// the rules that read and write it live in `DownloadOwnership.swift`, which
+    /// is also where the reasoning is. In memory only, like `states`.
+    var owners: [String: UUID] = [:]
+
     let context: ModelContext
     let store: EpisodeStore
     private let transport: FileTransport
+    private let deliveryBarrier: DeliveryBarrier
 
     /// Spec §7 allows one active transfer; the rest wait their turn in order.
     private var isTransferring = false
@@ -80,11 +99,12 @@ final class DownloadManager {
 
     init(
         context: ModelContext, store: EpisodeStore = EpisodeStore(),
-        transport: @escaping FileTransport
+        transport: @escaping FileTransport, deliveryBarrier: @escaping DeliveryBarrier = {}
     ) {
         self.context = context
         self.store = store
         self.transport = transport
+        self.deliveryBarrier = deliveryBarrier
     }
 
     /// The state of this episode's transfer, or `nil` when it is not in flight.
@@ -117,6 +137,10 @@ final class DownloadManager {
             throw Failure.invalidEnclosureURL(enclosureURL)
         }
 
+        // the token is taken before anything is written, so a completion routed
+        // from the session while this transfer runs cannot write over it
+        guard let token = claimOwnership(of: guid) else { return }
+
         // before the slot, not after: a queued transfer with no state reads as
         // "not downloaded", so the row keeps offering Download and a second tap
         // fetches the same episode twice
@@ -125,13 +149,32 @@ final class DownloadManager {
         defer { releaseSlot() }
 
         do {
+            // first, because the slot above can be waited on for a long time and
+            // `acquireSlot()` parks on a non-throwing continuation there is no
+            // cancelling out of: a caller the user backed out of while it was
+            // queued would otherwise wake up and run the whole transfer
+            try Task.checkCancellation()
+
             // never assume launch succeeded: `CueApp.init()` prepares the
             // directory non-fatally, so the writing path prepares it again and
             // surfaces its own error. Before the transport, so a broken
             // container costs no bandwidth
             try store.prepareEpisodesDirectory()
 
-            let (tempURL, response) = try await transport(url)
+            // the guid rides with the request so the production transport can
+            // stamp it on the task; a stub simply ignores it
+            let delivered: Result<(URL, URLResponse), Error>
+            do {
+                delivered = .success(
+                    try await DownloadTaskIdentity.$currentGUID.withValue(guid) { try await transport(url) })
+            } catch {
+                delivered = .failure(error)
+            }
+            // the session has handed this outcome over — success or failure — so
+            // everything below is work the background-events handler waits for
+            defer { deliveryBarrier() }
+
+            let (tempURL, response) = try delivered.get()
             if let failure = Self.statusFailure(for: response, enclosureURL: enclosureURL) {
                 // the temporary file is ours once the transport answers, and an
                 // error page is not an episode
@@ -140,11 +183,115 @@ final class DownloadManager {
             }
 
             try await finishDownload(tempURL: tempURL, response: response, forGUID: guid)
-            states[guid] = nil
+            // only while this transfer is still the guid's owner: a completion
+            // routed from the session may have taken it over
+            if releaseOwnership(of: guid, heldBy: token) { states[guid] = nil }
         } catch {
             // a cancelled transfer is not a failed one — the user backed out
-            states[guid] = isCancellation(error) ? nil : .failed
+            if releaseOwnership(of: guid, heldBy: token) {
+                states[guid] = isCancellation(error) ? nil : .failed
+            }
             throw error
+        }
+    }
+
+    // MARK: - Background session
+
+    /// Re-attaches to the background session at launch (spec §7).
+    ///
+    /// Two things a fresh process cannot know on its own: which transfers the
+    /// system kept running while the app was gone, and what to do with one that
+    /// finished in the meantime. Both come from the session — never from the
+    /// store, which has no column for either — so this asks it for both.
+    ///
+    /// Idempotent: registering the handler again replaces it, and adopting a
+    /// transfer already marked `.downloading` writes the same value.
+    func connect(to downloader: BackgroundDownloader) async {
+        registerCompletionRoute(with: downloader)
+        adopt(inFlightGUIDs: await downloader.adoptInFlightTasks())
+    }
+
+    /// Installs the route a completion with no continuation takes.
+    ///
+    /// Synchronous, and called from `CueApp.init()` rather than only from a
+    /// view's `.task`: a relaunch made purely to deliver a finished transfer may
+    /// never present a scene, and a completion with nowhere to go is a finished
+    /// download thrown away.
+    func registerCompletionRoute(with downloader: BackgroundDownloader) {
+        downloader.setOrphanedCompletionHandler { [weak self] result, guid in
+            Task { @MainActor [weak self] in
+                // the system may suspend the app once the downloader answers
+                // UIKit, and it waits for this
+                defer { downloader.completeDeliveredWork() }
+                guard let self else {
+                    if case .success(let (tempURL, _)) = result {
+                        try? FileManager.default.removeItem(at: tempURL)
+                    }
+                    return
+                }
+                await handleCompletion(result, forGUID: guid)
+            }
+        }
+    }
+
+    /// What the relaunch route does with a transfer that finished without us.
+    ///
+    /// A failure is recorded as one: the transfer belongs to a process that may
+    /// be gone, so there is no continuation to throw to, and a row left
+    /// `.downloading` offers neither a retry nor a delete.
+    ///
+    /// Separate from the closure that installs it so the policy is testable
+    /// without constructing a background session.
+    func handleCompletion(_ result: Result<(URL, URLResponse), Error>, forGUID guid: String) async {
+        // both before the awaits below: an `adopt` landing mid-finish must not
+        // mark this transfer as still in flight, and the claim is what the
+        // duplicate guard in `download(_:)` tests. Without it the row reads as
+        // idle for the length of the finish — which suspends, on the asset read
+        // — so a tap starts a second transfer for the same guid, and the finish
+        // below then clears the state that second transfer is holding
+        resolvedGUIDs.insert(guid)
+        // a live transfer of this process already holds the guid, so there is
+        // nothing here to write: one writer per guid (`DownloadOwnership.swift`).
+        // Discard the delivered file exactly as the unknown-guid path does. The
+        // tradeoff is deliberate — if that transfer later fails a finished
+        // download is thrown away and the user retries, which beats a deleted
+        // download reappearing
+        guard let token = claimOwnership(of: guid) else {
+            if case .success(let (tempURL, _)) = result {
+                Self.logger.notice("completion for a guid already in flight here; discarding the file")
+                try? FileManager.default.removeItem(at: tempURL)
+            }
+            return
+        }
+        states[guid] = .downloading
+        do {
+            switch result {
+            case .success(let (tempURL, response)):
+                try await finishDownload(tempURL: tempURL, response: response, forGUID: guid)
+                if releaseOwnership(of: guid, heldBy: token) { states[guid] = nil }
+            case .failure(let error):
+                throw error
+            }
+        } catch {
+            // nothing is on screen to alert on the relaunch route; the row shows
+            // the failure the next time it is looked at
+            if releaseOwnership(of: guid, heldBy: token) {
+                states[guid] = isCancellation(error) ? nil : .failed
+            }
+            // never `.public`: a `httpStatus` failure carries the enclosure URL,
+            // and a private feed's URL is a token (spec §6)
+            Self.logger.error("background download failed: \(error, privacy: .private)")
+        }
+    }
+
+    /// Marks the transfers the system kept running while the app was gone.
+    ///
+    /// A guid already resolved is skipped: the session's answer is a snapshot
+    /// taken before an `await`, so a completion routed in the meantime would
+    /// otherwise be overwritten with a `.downloading` nothing clears.
+    func adopt(inFlightGUIDs guids: [String]) {
+        for guid in guids where !resolvedGUIDs.contains(guid) {
+            states[guid] = .downloading
         }
     }
 
@@ -192,10 +339,26 @@ final class DownloadManager {
         // `download(_:)`, so the row reads as idle and a tap starts a second
         // transfer for the same guid. The screens no longer offer a delete
         // mid-transfer, and this is the line that keeps that from mattering
-        if states[episode.guid] == .failed {
+        let previousState = states[episode.guid]
+        if previousState == .failed {
             states[episode.guid] = nil
         }
-        try store.removeFile(forRelativeFilename: filename)
+
+        do {
+            try store.removeFile(forRelativeFilename: filename)
+        } catch {
+            // the file is still there — `removeFile` swallows only a confirmed
+            // not-found — so the row must go on claiming it. Left cleared, the
+            // Downloads filter drops the episode and no screen can offer the
+            // delete again, which strands the file for good. The restoring save
+            // may itself fail; that error is discarded rather than reported,
+            // because the removal failure is the one the user has to see
+            episode.localFilename = filename
+            episode.downloadedAt = previousDownloadedAt
+            states[episode.guid] = previousState
+            try? context.save()
+            throw error
+        }
     }
 
     // MARK: - Helpers
