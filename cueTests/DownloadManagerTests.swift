@@ -25,15 +25,6 @@ struct DownloadManagerTests {
         return episode
     }
 
-    /// The same episode as the store committed it — the only way to tell a
-    /// committed write from a pending one.
-    private func persistedEpisode(guid: String, in context: ModelContext) throws -> Episode? {
-        let fresh = ModelContext(context.container)
-        var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
-        descriptor.fetchLimit = 1
-        return try fresh.fetch(descriptor).first
-    }
-
     // MARK: - download
 
     @Test func downloadLandsTheFileAndWritesBothColumns() async throws {
@@ -283,6 +274,39 @@ struct DownloadManagerTests {
 
             #expect(throws: Never.self) { try manager.deleteDownload(for: episode) }
             #expect(episode.localFilename == nil)
+        }
+    }
+
+    /// A removal that could not be performed leaves the file on disk, so the row
+    /// has to go on claiming it: cleared, the Downloads filter drops the episode
+    /// and no screen can offer the delete again.
+    @Test func aFailedRemovalLeavesTheEpisodeStillClaimingItsFile() async throws {
+        try await withTemporaryBaseAsync { base in
+            let context = try makeContext()
+            let store = EpisodeStore(baseDirectory: base)
+            let episode = try makeEpisode(in: context)
+            let stub = DownloadTransportStub(stagingDirectory: base)
+            let manager = DownloadManager(context: context, store: store, transport: stub.transport)
+            try await manager.download(episode)
+            let downloaded = try #require(episode.localFilename)
+            let downloadedAt = try #require(episode.downloadedAt)
+
+            // a name the store refuses to resolve: `removeFile` throws before it
+            // reaches the file system, which is the shape of every removal that
+            // could not be performed — the file is still there afterwards
+            episode.localFilename = "../escape"
+            try context.save()
+
+            #expect(throws: EpisodeStore.Failure.invalidFilename("../escape")) {
+                try manager.deleteDownload(for: episode)
+            }
+
+            #expect(episode.localFilename == "../escape")
+            #expect(episode.downloadedAt == downloadedAt)
+            let persisted = try #require(try persistedEpisode(guid: "guid-1", in: context))
+            #expect(persisted.localFilename == "../escape")
+            #expect(persisted.downloadedAt == downloadedAt)
+            try #expect(store.fileExists(forRelativeFilename: downloaded) == true)
         }
     }
 

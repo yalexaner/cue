@@ -45,10 +45,7 @@ struct DownloadManagerDurationTests {
             // the feed's value is what a consumer sees while nothing better exists
             #expect(episode.duration == 1800)
 
-            let fresh = ModelContext(context.container)
-            var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == "guid-1" })
-            descriptor.fetchLimit = 1
-            let persisted = try #require(try fresh.fetch(descriptor).first)
+            let persisted = try #require(try persistedEpisode(guid: "guid-1", in: context))
             #expect(persisted.assetDuration == nil)
             #expect(persisted.localFilename == filename)
         }

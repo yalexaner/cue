@@ -21,16 +21,6 @@ struct DownloadManagerQueueTests {
         return episode
     }
 
-    /// Yields until `condition` holds, bounded so a regression fails the
-    /// assertion that follows instead of hanging the suite.
-    private func yieldUntil(_ condition: () -> Bool) async {
-        var spins = 0
-        while !condition(), spins < 1_000 {
-            await Task.yield()
-            spins += 1
-        }
-    }
-
     @Test func aTransferInFlightReadsAsDownloading() async throws {
         try await withTemporaryBaseAsync { base in
             let context = try makeContext()
@@ -76,6 +66,12 @@ struct DownloadManagerQueueTests {
             try await secondDownload.value
             #expect(first.localFilename != nil)
             #expect(second.localFilename != nil)
+
+            // committed, not merely pending
+            let firstStored = try #require(try persistedEpisode(guid: "guid-1", in: context))
+            let secondStored = try #require(try persistedEpisode(guid: "guid-2", in: context))
+            #expect(firstStored.localFilename == first.localFilename)
+            #expect(secondStored.localFilename == second.localFilename)
         }
     }
 
@@ -111,6 +107,37 @@ struct DownloadManagerQueueTests {
         }
     }
 
+    /// A caller cancelled while it was queued must not wake up and fetch.
+    ///
+    /// The slot is a non-throwing continuation, so cancellation cannot resume it
+    /// early: the queued call is handed the slot in the ordinary way and would
+    /// run the whole transfer for a user who backed out, unless it checks.
+    @Test func aTransferCancelledWhileQueuedNeverReachesTheTransport() async throws {
+        try await withTemporaryBaseAsync { base in
+            let context = try makeContext()
+            let store = EpisodeStore(baseDirectory: base)
+            let first = try makeEpisode(in: context, guid: "guid-1")
+            let second = try makeEpisode(in: context, guid: "guid-2")
+            let gate = GatedFileTransport(stagingDirectory: base)
+            let manager = DownloadManager(context: context, store: store, transport: gate.transport)
+
+            let firstDownload = Task { try await manager.download(first) }
+            await yieldUntil { gate.callCount == 1 }
+            let secondDownload = Task { try await manager.download(second) }
+            await yieldUntil { manager.state(for: second) != nil }
+            try #require(gate.callCount == 1)
+
+            secondDownload.cancel()
+            gate.open()
+            try await firstDownload.value
+            await #expect(throws: CancellationError.self) { try await secondDownload.value }
+
+            #expect(gate.callCount == 1)
+            #expect(second.localFilename == nil)
+            #expect(manager.state(for: second) == nil)
+        }
+    }
+
     /// The slot is released by a failed transfer too — otherwise every later
     /// download parks forever on a continuation nothing resumes.
     @Test func aFailedTransferHandsTheSlotOn() async throws {
@@ -129,64 +156,6 @@ struct DownloadManagerQueueTests {
 
             #expect(second.localFilename != nil)
             #expect(manager.state(for: second) == nil)
-        }
-    }
-}
-
-/// A file transport that parks every call until it is opened.
-///
-/// `DownloadTransportStub` answers as fast as it is asked, which is what makes
-/// it useless for observing an episode *while* its transfer is in flight; this
-/// one holds the transfer open until the test says otherwise.
-private final class GatedFileTransport: @unchecked Sendable {
-    private let lock = NSLock()
-    private let stagingDirectory: URL
-    private var waiting: [CheckedContinuation<Void, Never>] = []
-    private var isOpen = false
-    private var calls = 0
-
-    init(stagingDirectory: URL) {
-        self.stagingDirectory = stagingDirectory
-    }
-
-    var callCount: Int { lock.withLock { calls } }
-
-    /// Lets every parked call through, and every later one straight past.
-    func open() {
-        let parked = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
-            isOpen = true
-            let parked = waiting
-            waiting = []
-            return parked
-        }
-        for continuation in parked {
-            continuation.resume()
-        }
-    }
-
-    var transport: DownloadManager.FileTransport {
-        { [self] url in
-            lock.withLock { calls += 1 }
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                let alreadyOpen = lock.withLock { () -> Bool in
-                    guard isOpen else {
-                        waiting.append(continuation)
-                        return false
-                    }
-                    return true
-                }
-                if alreadyOpen { continuation.resume() }
-            }
-            guard
-                let response = HTTPURLResponse(
-                    url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
-            else {
-                throw StubTransportError.unbuildableResponse
-            }
-            let temporaryURL = stagingDirectory.appending(
-                path: "gated-\(UUID().uuidString).tmp", directoryHint: .notDirectory)
-            try Data("audio".utf8).write(to: temporaryURL)
-            return (temporaryURL, response)
         }
     }
 }
