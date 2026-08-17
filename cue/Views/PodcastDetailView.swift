@@ -8,8 +8,10 @@ import SwiftUI
 /// no predicate over a relationship and follows the show it was pushed with. The
 /// order comes from `episodesNewestFirst(_:)`, which is plain and tested.
 ///
-/// There is no downloaded indicator yet — downloads arrive in the next step, and
-/// a file-system read per row is not something to add before there is one.
+/// The download indicator reads `localFilename` and the manager's in-memory
+/// transfer state, never the file system: `episodeDownloadState(localFilename:transfer:)`
+/// carries that policy, and the Downloads screen is where file presence is
+/// actually verified (spec §7).
 struct PodcastDetailView: View {
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "dev.yachmenev.cue",
@@ -17,11 +19,13 @@ struct PodcastDetailView: View {
     )
 
     @Environment(\.modelContext) private var context
+    @Environment(DownloadManager.self) private var downloads
 
     let podcast: Podcast
 
     @State private var refreshErrorMessage: String?
     @State private var saveErrorMessage: String?
+    @State private var downloadErrorText: String?
 
     private var episodes: [Episode] {
         episodesNewestFirst(podcast.episodes)
@@ -29,7 +33,7 @@ struct PodcastDetailView: View {
 
     var body: some View {
         List(episodes) { episode in
-            EpisodeRow(episode: episode)
+            EpisodeRow(episode: episode, downloadState: downloadState(for: episode))
                 .swipeActions(edge: .leading) {
                     Button {
                         setPlayed(!episode.isPlayed, on: episode)
@@ -38,12 +42,16 @@ struct PodcastDetailView: View {
                     }
                     .tint(episode.isPlayed ? .gray : .accentColor)
                 }
+                .swipeActions(edge: .trailing) {
+                    downloadButton(for: episode)
+                }
                 .contextMenu {
                     Button {
                         setPlayed(!episode.isPlayed, on: episode)
                     } label: {
                         playedLabel(for: episode)
                     }
+                    downloadButton(for: episode)
                 }
         }
         .navigationTitle(podcast.title)
@@ -60,6 +68,61 @@ struct PodcastDetailView: View {
         .refreshable { await refresh() }
         .refreshErrorAlert($refreshErrorMessage)
         .errorAlert("Could Not Save", $saveErrorMessage)
+        .errorAlert("Download Failed", $downloadErrorText)
+    }
+
+    private func downloadState(for episode: Episode) -> EpisodeDownloadState {
+        episodeDownloadState(localFilename: episode.localFilename, transfer: downloads.state(for: episode))
+    }
+
+    /// The row's one file action, or nothing while a transfer is running.
+    ///
+    /// Which action it is comes from `downloadAction(for:)`, so the swipe and the
+    /// context menu cannot offer different things for the same row.
+    @ViewBuilder
+    private func downloadButton(for episode: Episode) -> some View {
+        switch downloadAction(for: downloadState(for: episode)) {
+        case .download:
+            Button {
+                download(episode)
+            } label: {
+                Label("Download", systemImage: "arrow.down.circle")
+            }
+            .tint(.accentColor)
+        case .delete:
+            Button(role: .destructive) {
+                deleteDownload(episode)
+            } label: {
+                Label("Delete Download", systemImage: "trash")
+            }
+        case nil:
+            EmptyView()
+        }
+    }
+
+    /// Starts a transfer and reports what it refused to do.
+    ///
+    /// Detached from the row's lifetime on purpose: a transfer is the manager's,
+    /// not the view's, and `.task`-style ownership would cancel a download the
+    /// moment the user scrolled back to the library. Cancellation is therefore
+    /// not expected here, and `downloadErrorMessage(for:)` answers `nil` for it
+    /// anyway.
+    private func download(_ episode: Episode) {
+        Task {
+            do {
+                try await downloads.download(episode)
+            } catch {
+                downloadErrorText = downloadErrorMessage(for: error)
+            }
+        }
+    }
+
+    private func deleteDownload(_ episode: Episode) {
+        do {
+            try downloads.deleteDownload(for: episode)
+        } catch {
+            downloadErrorText = downloadErrorMessage(for: error)
+        }
     }
 
     /// Toggles played and commits it immediately.
@@ -109,9 +172,14 @@ struct PodcastDetailView: View {
     }
 }
 
-/// One episode row: title, publication date, duration, played indicator.
+/// One episode row: title, publication date, duration, download and played
+/// indicators.
+///
+/// The two indicators are independent, and both can show at once: a downloaded
+/// episode that has been played keeps its file (spec §4, AC 8).
 private struct EpisodeRow: View {
     let episode: Episode
+    let downloadState: EpisodeDownloadState
 
     var body: some View {
         HStack(spacing: 12) {
@@ -124,11 +192,31 @@ private struct EpisodeRow: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
+            downloadIndicator
             if episode.isPlayed {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Played")
             }
+        }
+    }
+
+    @ViewBuilder
+    private var downloadIndicator: some View {
+        switch downloadState {
+        case .downloading:
+            ProgressView()
+                .accessibilityLabel("Downloading")
+        case .downloaded:
+            Image(systemName: "arrow.down.circle.fill")
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Downloaded")
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .accessibilityLabel("Download Failed")
+        case .notDownloaded:
+            EmptyView()
         }
     }
 }
