@@ -12,7 +12,8 @@ mid-episode never destroys where you actually were.
 
 **Status: in development** — the bullets above describe the finished v1, not
 what runs today. Working now: subscribe to a feed by URL, browse a show's
-episodes, mark played, pull to refresh. Not built yet: downloads, playback,
+episodes, mark played, pull to refresh, and download episodes over a background
+`URLSession` with a Downloads tab grouped by show. Not built yet: playback,
 session tracking, sleep timer, OPML import. See `ROADMAP.md`.
 
 ## Build

@@ -27,6 +27,12 @@ values or use a `switch` instead of a `Set` membership test. (Changing this
 means disabling one of the two rules in `.swiftlint.yml` or `.swift-format`,
 which is a project-wide decision, not a per-step workaround.)
 
+`just lint` runs `--strict`, so SwiftLint's default 400-line `file_length`
+*warning* fails the build. `.swiftlint.yml` overrides `type_body_length` but not
+`file_length`: split a long file or suite by topic — `DownloadPolicy.swift`,
+`DownloadManagerRelaunchTests.swift`, `DownloadManagerDurationTests.swift` are
+all splits, not designs — rather than raising the limit.
+
 ## Project structure
 
 - New `.swift` files anywhere under `cue/` or `cueTests/` compile automatically —
@@ -55,11 +61,19 @@ These are not preferences. Each one is a bug being designed out.
   absolute URL is rebuilt at every access from `episodesDirectory()`. The
   container path contains a UUID that changes on reinstall and restore, so
   persisting an absolute path guarantees breakage. (spec §5)
-  Resolution and existence checks go through `EpisodeStore` —
-  `url(forRelativeFilename:)` and `fileExists(forRelativeFilename:)`. Never
-  compose an episode path by hand; the store is the single place that rejects
-  names which would resolve outside `Episodes/`. `EpisodeStore` is a cheap
-  struct constructed at the call site — no shared singleton.
+  Resolution, existence, move, remove, size *and naming* go through
+  `EpisodeStore` — `url(forRelativeFilename:)`,
+  `fileExists(forRelativeFilename:)`, `moveFile(at:toRelativeFilename:)`
+  (overwrite-safe, so a crash between the move and the model write cannot block
+  a retry), `removeFile(forRelativeFilename:)` (a confirmed not-found is
+  success), `fileSize(forRelativeFilename:)` (`nil` only on a confirmed
+  not-found, otherwise it throws rather than contributing a silent zero) and
+  `downloadFilename(forEnclosureURL:)` (spec §5: a fresh UUID plus an extension
+  inferred from the enclosure path, fallback `mp3`, composing only). Never
+  compose an episode path by hand, and never reach for `FileManager` on an
+  episode file directly; the store is the single place that rejects names which
+  would resolve outside `Episodes/`. `EpisodeStore` is a cheap struct
+  constructed at the call site — no shared singleton.
 - **Resolving a path never touches the file system.** `episodesDirectory()`
   composes only; `prepareEpisodesDirectory()` is the sole mutating entry point
   (creates the directory, sets `isExcludedFromBackup`). A read such as
@@ -145,7 +159,60 @@ Two more that follow from the same design and are easy to break by accident:
   over is the injection, not the signature: the downloader takes its own
   file-based transport (a URL in, a temporary file URL plus `URLResponse` out),
   keeps the session configuration behind that closure, and no test constructs a
-  real background session.
+  real background session. That seam is
+  `DownloadManager.FileTransport = @Sendable (URL) async throws -> (URL, URLResponse)`;
+  the production closure is `BackgroundDownloader.shared.transport`, and every
+  download test injects a stub over it. A download's temporary file is claimed
+  inside the delegate callback, before it returns — the system deletes it after.
+  Because `FileTransport` carries a URL and nothing else, the episode identity a
+  task needs travels out of band: `DownloadTaskIdentity.currentGUID` (a task-local
+  set around the transport call) stamps `URLSessionTask.taskDescription`, which is
+  how a relaunched app maps a finished task back to an `Episode`.
+- **`DownloadManager` is the one long-lived service, on purpose.** It is a
+  `@MainActor @Observable final class` created once in `CueApp` and injected with
+  `.environment`, not a struct built at the call site: a background session's
+  delegate and the in-memory per-guid transfer state have to outlive any view,
+  and transfer state is deliberately not persisted (the spec's schema has no
+  column for it and `#Unique` upserts make new columns a refresh hazard —
+  a mid-download termination is recovered from the session, not the store).
+  `BackgroundDownloader` is a singleton for a harder reason: a background session
+  identifier is process-global, so a second instance is a runtime error (the
+  session itself is created behind a lock rather than by a `lazy var`, whose
+  initialisation is not atomic and which the app delegate and the transport can
+  reach at the same moment). Neither is a precedent for anything else — every
+  other service stays a cheap struct.
+- **A relaunch delivery is never dropped, and never answered early.** iOS may
+  relaunch the app *only* to hand over a finished background transfer, so:
+  `AppDelegate` — the app's one UIKit entry point, via
+  `@UIApplicationDelegateAdaptor`, for
+  `application(_:handleEventsForBackgroundURLSession:completionHandler:)` and
+  nothing else — stores the handler and wakes the session; `CueApp.init()`
+  installs the completion route (`DownloadManager.registerCompletionRoute(with:)`)
+  before any scene exists, because a background launch may never present one;
+  `BackgroundDownloader` still *queues* an orphaned outcome that arrives before a
+  handler is registered rather than deleting its file; failures are routed
+  alongside successes, since a completion nobody hears about leaves its row
+  transferring forever; and the stored UIKit handler is called only once the
+  session has delivered every event *and* `completeDeliveredWork()` says the
+  finishes are done — answering it early lets the system suspend the app
+  mid-move. That accounting covers *both* routes: a suspended-not-terminated app
+  still holds the continuation, so an awaited outcome is counted at delivery too
+  and released by `DownloadManager`'s `DeliveryBarrier`, which is injected beside
+  the transport (a stub transport gets the default no-op) and fired exactly once
+  per transport call, failures included. UIKit handlers *queue* rather than
+  replace each other, and the "events delivered" signal is consumed only when
+  handlers actually leave: a handler handed over after its events were already
+  delivered — the suspended-not-terminated order — is answered at registration,
+  and answering a replaced handler inline would report "safe to suspend" while a
+  finish is still running. Background transfers are carried by the
+  system daemon and need no `UIBackgroundModes` entry: `Info.plist` stays `audio`
+  only.
+- **The app builds its own `ModelContainer`.** `CueApp.init()` constructs it and
+  passes it to `.modelContainer(container)` rather than `.modelContainer(for:)`,
+  because `DownloadManager` needs `mainContext` before the scene body runs; a
+  container that cannot open is a deliberate `fatalError` (the modifier traps
+  too). Adding a model means updating two schema lists: `CueApp.init()` and
+  `makeContext()` in `cueTests/InMemoryContainer.swift`.
 - **The default transport revalidates.** `FeedService.feedRequest(for:)` sets
   `cachePolicy = .reloadRevalidatingCacheData`, and that is a correctness
   requirement rather than a tuning knob: refresh is manual only (spec §6), so a
@@ -159,7 +226,18 @@ Two more that follow from the same design and are easy to break by accident:
   episode is owned elsewhere throws `Failure.allEpisodesOwnedElsewhere(url)`.
   Transport errors (`URLError`, ATS rejections) and `FeedParser.Failure`
   propagate unchanged — wrapping them hides the cause. `feedErrorMessage(for:)`
-  is the single place those map to user-facing text.
+  is the single place those map to user-facing text. Download failures map
+  through `downloadErrorMessage(for:)` (`cue/Views/DownloadErrorMessage.swift`)
+  instead — it covers `DownloadManager.Failure` and `EpisodeStore.Failure`, and
+  returns `String?` so cancellation cannot be reported by forgetting a `catch`,
+  the same shape as `reportableFeedErrorMessage(for:)`. The feed mapper stays
+  feed-only.
+- **A feed or enclosure URL never reaches the log at `.public` privacy.** Private
+  feeds are pre-signed (spec §6), so those URLs are tokens, and `os_log` renders
+  an error's associated values — `DownloadManager.Failure.httpStatus(_, url)`
+  carries one. Log at the default (private) privacy, or log the status and the
+  guid instead; `.public` entries persist in the device log and in a
+  sysdiagnose. See `docs/SECRETS.md`.
 - **Cancellation is not a failure to report.** `.refreshable`'s task is
   cancelled when its view goes away and `URLSession` surfaces that as
   `URLError.cancelled`; `isCancellation(_:)` (`cue/Views/FeedRefreshing.swift`)
@@ -218,15 +296,24 @@ Two more that follow from the same design and are easy to break by accident:
   failures stop a loop, which one gets reported, what a pasted address may be
   rewritten to) — is extracted into a plain free function
   (`cue/Views/EpisodeListFormatting.swift`, `cue/Views/FeedErrorMessage.swift`,
-  `cue/Views/FeedRefreshing.swift`, `cue/Views/FeedAddress.swift`) and tested
-  directly. Model mutations a view triggers live on the model
-  (`Episode.setPlayed(_:)`), so invariants stay pinned by model tests.
+  `cue/Views/FeedRefreshing.swift`, `cue/Views/FeedAddress.swift`,
+  `cue/Views/DownloadListFormatting.swift`, `cue/Views/DownloadErrorMessage.swift`)
+  and tested directly — including the policy the two download screens must not
+  answer differently: a transfer in flight outranks a stored file, and a row
+  mid-transfer offers neither action. Model mutations a view triggers live on the
+  model (`Episode.setPlayed(_:)`), so invariants stay pinned by model tests.
 - Fixtures live in `cueTests/Fixtures/` and load through the shared
   `fixtureData(named:withExtension:)` helper in `cueTests/FixtureLoading.swift`,
   which resolves the test bundle via `Bundle(for:)` with a private marker class.
   Never read fixtures from a path on disk, and never re-declare a local loader.
-- There is one transport double, `FeedTransportStub`
-  (`cueTests/FeedTransportStub.swift`), and one `StubTransportError`. Same rule
+- There is one transport double *per transport type*: `FeedTransportStub`
+  (`cueTests/FeedTransportStub.swift`) for `FeedService.Transport` and
+  `DownloadTransportStub` (`cueTests/DownloadTransportStub.swift`) for
+  `DownloadManager.FileTransport`, sharing one `StubTransportError`. The download
+  stub writes fresh bytes per call because the manager *moves* what it is handed,
+  and it records peak concurrency so spec §7's one-transfer-at-a-time rule is
+  assertable; the cases it must never produce by accident live beside it as
+  `failingFileTransport(_:)` and `missingFileTransport(in:)`. Same rule
   as the fixture loader: never re-declare a per-suite copy. A stub that cannot
   build its `HTTPURLResponse` throws — degrading to a plain `URLResponse` reads
   as "no status to judge" and quietly sends a status test down the 2xx path.
@@ -248,8 +335,20 @@ Two more that follow from the same design and are easy to break by accident:
   suite left behind silently runs against a different store. Never share a
   container across tests. Suites touching SwiftData are `@MainActor`.
 - Never let a test touch the real Application Support. Use
-  `withTemporaryBase` (`cueTests/TemporaryDirectory.swift`) and construct
-  `EpisodeStore(baseDirectory:)` against the directory it hands you.
+  `withTemporaryBase` for synchronous bodies and `withTemporaryBaseAsync` for
+  awaiting ones (`cueTests/TemporaryDirectory.swift`), and construct
+  `EpisodeStore(baseDirectory:)` against the directory it hands you. They are two
+  names rather than an overload on purpose — two same-named functions taking only
+  a closure are ambiguous at a trailing-closure call site, which
+  `swift-format --strict` rejects — and the async one carries
+  `isolation: isolated (any Actor)? = #isolation` so a `@MainActor` suite can
+  hand it a closure over `@Model` values without the compiler treating them as
+  sent across an isolation boundary. Do not drop that parameter.
+- The relaunch route is tested through its own seams —
+  `DownloadManager.handleCompletion(_:forGUID:)`, `adopt(inFlightGUIDs:)` and
+  `BackgroundDownloader.route(_:forGUID:)` — never through `connect(to:)`, so no
+  test constructs a background session. Constructing a `BackgroundDownloader`
+  does not create one; touching its `session` does, and no test may.
 - Inside a throwing closure, write `try #expect(…)` — `#expect(try …)` fails to
   compile there, though it works at the top level of a `throws` test function.
 - Every step must leave `just build` and `just test` green.
