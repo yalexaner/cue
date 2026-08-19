@@ -263,11 +263,11 @@ struct DownloadManagerProgressTests {
 
             token = try beginAttempt(on: manager, taskIdentifier: 2)
             #expect(manager.releaseOwnership(of: "guid-1", heldBy: token))
-            manager.states["guid-1"] = .failed
+            manager.states["guid-1"] = .failed(message: "failed")
             manager.handleProgress(
                 taskIdentifier: 2, guid: "guid-1",
                 progress: .indeterminate(bytesWritten: 10))
-            #expect(manager.states["guid-1"] == .failed)
+            #expect(manager.states["guid-1"] == .failed(message: "failed"))
 
             token = try beginAttempt(on: manager, taskIdentifier: 3)
             #expect(manager.releaseOwnership(of: "guid-1", heldBy: token))

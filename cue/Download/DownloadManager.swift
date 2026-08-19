@@ -47,7 +47,7 @@ final class DownloadManager {
         case downloading(DownloadProgress)
         /// The last attempt failed. Cleared by the next attempt, not by time —
         /// the row has to be able to show that trying again is worth a tap.
-        case failed
+        case failed(message: String)
 
         var isDownloading: Bool {
             if case .downloading = self { return true }
@@ -147,8 +147,9 @@ final class DownloadManager {
         guard states[guid]?.isDownloading != true else { return }
         let enclosureURL = episode.enclosureURL
         guard let url = Self.downloadURL(for: enclosureURL) else {
-            states[guid] = .failed
-            throw Failure.invalidEnclosureURL(enclosureURL)
+            let failure = Failure.invalidEnclosureURL(enclosureURL)
+            states[guid] = failureState(for: failure)
+            throw failure
         }
 
         // the token is taken before anything is written, so a completion routed
@@ -203,7 +204,7 @@ final class DownloadManager {
         } catch {
             // a cancelled transfer is not a failed one — the user backed out
             if releaseOwnership(of: guid, heldBy: token) {
-                states[guid] = isCancellation(error) ? nil : .failed
+                states[guid] = failureState(for: error)
             }
             throw error
         }
@@ -292,6 +293,16 @@ final class DownloadManager {
     }
 
     // MARK: - Helpers
+
+    /// The one conversion every terminal failure route uses.
+    ///
+    /// `downloadErrorMessage(for:)` owns both cancellation classification and
+    /// enclosure-URL redaction, so the live, preflight and relaunch routes
+    /// cannot drift into different row messages. Cancellation maps to no state.
+    func failureState(for error: Error) -> DownloadState? {
+        guard let message = downloadErrorMessage(for: error) else { return nil }
+        return .failed(message: message)
+    }
 
     /// Waits until this call owns the single transfer slot.
     ///

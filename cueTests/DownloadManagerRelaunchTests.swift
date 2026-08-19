@@ -77,7 +77,8 @@ struct DownloadManagerRelaunchTests {
 
             await manager.handleCompletion(.failure(StubTransportError.offline), forGUID: "guid-1")
 
-            #expect(manager.state(for: episode) == .failed)
+            let message = try #require(downloadErrorMessage(for: StubTransportError.offline))
+            #expect(manager.state(for: episode) == .failed(message: message))
             #expect(episode.localFilename == nil)
         }
     }

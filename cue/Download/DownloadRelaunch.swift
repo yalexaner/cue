@@ -81,7 +81,7 @@ extension DownloadManager {
             // nothing is on screen to alert on the relaunch route; the row shows
             // the failure the next time it is looked at
             if releaseOwnership(of: guid, heldBy: token) {
-                states[guid] = isCancellation(error) ? nil : .failed
+                states[guid] = failureState(for: error)
             }
             // never `.public`: a `httpStatus` failure carries the enclosure URL,
             // and a private feed's URL is a token (spec §6)
