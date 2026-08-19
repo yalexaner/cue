@@ -10,7 +10,7 @@ extension DownloadManager {
     /// download thrown away.
     func registerCompletionRoute(with downloader: BackgroundDownloader) {
         downloader.setAttemptRegistrationHandler { [weak self] taskIdentifier, guid in
-            await self?.registerAttempt(taskIdentifier: taskIdentifier, forGUID: guid)
+            await self?.registerStartedAttempt(taskIdentifier: taskIdentifier, forGUID: guid)
         }
         downloader.setProgressHandler { [weak self] taskIdentifier, guid, progress in
             Task { @MainActor [weak self] in
@@ -70,14 +70,20 @@ extension DownloadManager {
         }
         states[guid] = .downloading(attempts[guid]?.progress ?? .waiting)
         do {
+            try checkCancellation(of: guid, heldBy: token)
             switch result {
             case .success(let (tempURL, response)):
-                try await finishDownload(tempURL: tempURL, response: response, forGUID: guid)
+                try await finishDownload(
+                    tempURL: tempURL, response: response, forGUID: guid,
+                    heldBy: token)
                 if releaseOwnership(of: guid, heldBy: token) { states[guid] = nil }
             case .failure(let error):
                 throw error
             }
         } catch {
+            if case .success(let (tempURL, _)) = result {
+                try? FileManager.default.removeItem(at: tempURL)
+            }
             // nothing is on screen to alert on the relaunch route; the row shows
             // the failure the next time it is looked at
             if releaseOwnership(of: guid, heldBy: token) {

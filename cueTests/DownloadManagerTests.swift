@@ -230,7 +230,9 @@ struct DownloadManagerTests {
             try Data("audio".utf8).write(to: staged)
 
             await #expect(throws: Never.self) {
-                try await manager.finishDownload(tempURL: staged, response: nil, forGUID: "no-such-guid")
+                try await manager.finishDownload(
+                    tempURL: staged, response: nil, forGUID: "no-such-guid",
+                    heldBy: UUID())
             }
             #expect(!FileManager.default.fileExists(atPath: staged.path(percentEncoded: false)))
         }

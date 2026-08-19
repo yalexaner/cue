@@ -25,11 +25,25 @@ struct DownloadAttempt: Equatable {
 }
 
 extension DownloadManager {
+    /// Throws when this exact attempt has been cancelled or displaced.
+    ///
+    /// The token matters as much as the guid: a delayed checkpoint from an old
+    /// attempt must not inspect or alter the retry that replaced it.
+    func checkCancellation(of guid: String, heldBy token: UUID) throws {
+        guard let attempt = attempts[guid], attempt.token == token else { throw CancellationError() }
+        if attempt.isCancellationRequested { throw CancellationError() }
+    }
+
     /// Registers the background task before it is resumed.
     ///
     /// The ownership record is created by `download(_:)` before it can queue.
     /// A registration with no such record is stale and cannot create a live
-    /// attempt merely by reporting itself.
+    /// attempt merely by reporting itself, and an adopted attempt keeps the
+    /// identifier it was adopted with.
+    ///
+    /// The production route in is `registerStartedAttempt`, which also carries
+    /// over a cancellation that arrived before this task existed; this is the
+    /// bare record write.
     func registerAttempt(taskIdentifier: Int, forGUID guid: String) {
         guard var attempt = attempts[guid], attempt.origin == .started else { return }
         attempt.taskIdentifier = taskIdentifier

@@ -117,10 +117,12 @@ struct DownloadManagerRelaunchTests {
             let episode = try makeEpisode(in: context)
             let manager = makeManager(context: context, base: base)
             let staged = try stagedFile(in: base)
+            let token = try #require(manager.claimOwnership(of: "guid-1"))
 
             await #expect(throws: DownloadManager.Failure.httpStatus(403, Self.enclosureURL)) {
                 try await manager.finishDownload(
-                    tempURL: staged, response: try response(403), forGUID: "guid-1")
+                    tempURL: staged, response: try response(403), forGUID: "guid-1",
+                    heldBy: token)
             }
 
             #expect(episode.localFilename == nil)

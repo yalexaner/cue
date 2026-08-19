@@ -56,8 +56,8 @@ struct DownloadsView: View {
                 Section {
                     ForEach(group.episodes) { episode in
                         DownloadedEpisodeRow(episode: episode)
-                            .swipeActions(edge: .trailing) { deleteButton(for: episode) }
-                            .contextMenu { deleteButton(for: episode) }
+                            .swipeActions(edge: .trailing) { fileButton(for: episode) }
+                            .contextMenu { fileButton(for: episode) }
                     }
                 } header: {
                     Text(group.title)
@@ -97,22 +97,31 @@ struct DownloadsView: View {
     /// Routed through `downloadAction(for:)` rather than shown unconditionally,
     /// because the two download screens must not answer the same row
     /// differently: a transfer in flight outranks a stored file, and a row
-    /// mid-transfer offers neither action. A re-download of an episode that
+    /// mid-transfer offers Cancel rather than Delete. A re-download of an episode that
     /// already has a file is exactly that row — it is listed here on file
     /// presence, and deleting under the running move is the race the policy
     /// exists to forbid (the delete clears the columns and the file, then the
     /// finish writes the new filename over them, so the episode comes back
     /// downloaded moments after the user removed it).
     @ViewBuilder
-    private func deleteButton(for episode: Episode) -> some View {
+    private func fileButton(for episode: Episode) -> some View {
         let state = episodeDownloadState(
             localFilename: episode.localFilename, transfer: downloads.state(for: episode))
-        if downloadAction(for: state) == .delete {
+        switch downloadAction(for: state) {
+        case .delete:
             Button(role: .destructive) {
                 delete(episode)
             } label: {
                 Label("Delete Download", systemImage: "trash")
             }
+        case .cancel:
+            Button(role: .destructive) {
+                Task { await downloads.cancel(episode) }
+            } label: {
+                Label("Cancel Download", systemImage: "xmark.circle")
+            }
+        case .download:
+            EmptyView()
         }
     }
 

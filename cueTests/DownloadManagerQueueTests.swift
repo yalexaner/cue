@@ -107,11 +107,11 @@ struct DownloadManagerQueueTests {
         }
     }
 
-    /// A caller cancelled while it was queued must not wake up and fetch.
+    /// A caller cancelled while it was queued fails immediately, without fetching.
     ///
-    /// The slot is a non-throwing continuation, so cancellation cannot resume it
-    /// early: the queued call is handed the slot in the ordinary way and would
-    /// run the whole transfer for a user who backed out, unless it checks.
+    /// The waiter parks on a *throwing* continuation and the cancellation
+    /// handler removes it, so the queued call must resolve while the running
+    /// transfer is still parked — not wait its turn behind it and then check.
     @Test func aTransferCancelledWhileQueuedNeverReachesTheTransport() async throws {
         try await withTemporaryBaseAsync { base in
             let context = try makeContext()
@@ -127,10 +127,14 @@ struct DownloadManagerQueueTests {
             await yieldUntil { manager.state(for: second) != nil }
             try #require(gate.callCount == 1)
 
+            // the gate stays shut: the queued call has to fail while the first
+            // transfer is still holding the slot
             secondDownload.cancel()
+            await #expect(throws: CancellationError.self) { try await secondDownload.value }
+            #expect(gate.callCount == 1)
+
             gate.open()
             try await firstDownload.value
-            await #expect(throws: CancellationError.self) { try await secondDownload.value }
 
             #expect(gate.callCount == 1)
             #expect(second.localFilename == nil)

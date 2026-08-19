@@ -25,7 +25,10 @@ extension DownloadManager {
     /// An unknown guid is ignored rather than fatal: the episode may have been
     /// deleted while the transfer was in flight, and a background completion
     /// must not crash the app it relaunched.
-    func finishDownload(tempURL: URL, response: URLResponse?, forGUID guid: String) async throws {
+    func finishDownload(
+        tempURL: URL, response: URLResponse?, forGUID guid: String,
+        heldBy token: UUID
+    ) async throws {
         guard let episode = try episode(forGUID: guid) else {
             Self.logger.notice("finished download for an unknown guid; discarding the file")
             try? FileManager.default.removeItem(at: tempURL)
@@ -46,6 +49,7 @@ extension DownloadManager {
             // transport was answering must leave the disk and the store alone,
             // and throwing from above would skip the restore below
             try Task.checkCancellation()
+            try checkCancellation(of: guid, heldBy: token)
             try store.prepareEpisodesDirectory()
             let destination = try store.moveFile(at: tempURL, toRelativeFilename: filename)
 
@@ -65,6 +69,7 @@ extension DownloadManager {
             // `do`, so the restore below takes the moved file back with the
             // fields
             try Task.checkCancellation()
+            try checkCancellation(of: guid, heldBy: token)
 
             episode.localFilename = filename
             episode.downloadedAt = .now
