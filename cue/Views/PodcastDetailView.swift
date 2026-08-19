@@ -75,7 +75,7 @@ struct PodcastDetailView: View {
         episodeDownloadState(localFilename: episode.localFilename, transfer: downloads.state(for: episode))
     }
 
-    /// The row's one file action, or nothing while a transfer is running.
+    /// The row's one file action, including Cancel while a transfer is running.
     ///
     /// Which action it is comes from `downloadAction(for:)`, so the swipe and the
     /// context menu cannot offer different things for the same row.
@@ -95,8 +95,12 @@ struct PodcastDetailView: View {
             } label: {
                 Label("Delete Download", systemImage: "trash")
             }
-        case nil:
-            EmptyView()
+        case .cancel:
+            Button(role: .destructive) {
+                cancelDownload(episode)
+            } label: {
+                Label("Cancel Download", systemImage: "xmark.circle")
+            }
         }
     }
 
@@ -104,9 +108,8 @@ struct PodcastDetailView: View {
     ///
     /// Detached from the row's lifetime on purpose: a transfer is the manager's,
     /// not the view's, and `.task`-style ownership would cancel a download the
-    /// moment the user scrolled back to the library. Cancellation is therefore
-    /// not expected here, and `downloadErrorMessage(for:)` answers `nil` for it
-    /// anyway.
+    /// moment the user scrolled back to the library. Cancellation is explicit
+    /// through the row action instead.
     private func download(_ episode: Episode) {
         Task {
             do {
@@ -115,6 +118,10 @@ struct PodcastDetailView: View {
                 downloadErrorText = downloadErrorMessage(for: error)
             }
         }
+    }
+
+    private func cancelDownload(_ episode: Episode) {
+        Task { await downloads.cancel(episode) }
     }
 
     private func deleteDownload(_ episode: Episode) {

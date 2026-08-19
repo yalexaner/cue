@@ -37,6 +37,9 @@ final class BackgroundDownloader: NSObject, @unchecked Sendable {
 
     static let shared = BackgroundDownloader()
 
+    /// The background session's total-transfer deadline.
+    static let resourceTimeout: TimeInterval = 2 * 60 * 60
+
     /// A finished transfer nobody is awaiting: its outcome and the episode guid
     /// that rode along in `taskDescription`.
     typealias OrphanedCompletion = @Sendable (Result<(URL, URLResponse), Error>, String) -> Void
@@ -123,6 +126,11 @@ final class BackgroundDownloader: NSObject, @unchecked Sendable {
             configuration.isDiscretionary = false
             // the reason the relaunch route exists at all
             configuration.sessionSendsLaunchEvents = true
+            // This is a total-transfer deadline and keeps running while the
+            // daemon waits for connectivity. Two hours bounds the seven-day
+            // default without killing a slow transfer that is still moving;
+            // the user-facing stall remedy is the waiting state plus Cancel.
+            configuration.timeoutIntervalForResource = Self.resourceTimeout
             let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
             storedSession = session
             return session
@@ -168,6 +176,13 @@ final class BackgroundDownloader: NSObject, @unchecked Sendable {
         }
     }
 
+    /// The guid-addressable cancellation seam injected into the manager.
+    var cancellationRequest: DownloadManager.CancellationRequest {
+        { [self] guid, taskIdentifier in
+            await cancelTransfer(forGUID: guid, taskIdentifier: taskIdentifier)
+        }
+    }
+
     /// Wakes the session and reports which episodes it is already transferring.
     ///
     /// Called at launch: a download interrupted by termination is recovered from
@@ -178,6 +193,48 @@ final class BackgroundDownloader: NSObject, @unchecked Sendable {
             guard let guid = DownloadTaskIdentity.guid(fromTaskDescription: task.taskDescription) else { return nil }
             return DownloadAttemptIdentity(taskIdentifier: task.taskIdentifier, guid: guid)
         }
+    }
+
+    /// Requests cancellation of the session task the cancelled attempt owns.
+    ///
+    /// `allTasks` is a snapshot, so this is deliberately best-effort in the
+    /// direction of missing a task: the manager's attempt-scoped checkpoints
+    /// close those windows. It must never be best-effort in the other
+    /// direction. Enumerating suspends, and the attempt being cancelled can
+    /// retire and be replaced by a retry for the same guid before the snapshot
+    /// arrives — the retry's task carries the same guid in its description, so
+    /// guid matching alone would cancel the transfer the user just started.
+    /// `taskIdentifier` narrows the match to the attempt that asked. There is
+    /// no guid-wide form: an attempt with no registered task is cancelled when
+    /// its registration supplies one, before that task is resumed.
+    ///
+    /// Task cancellation itself produces no outcome here; the delegate remains
+    /// the only route that delivers the terminal failure.
+    private func cancelTransfer(forGUID guid: String, taskIdentifier: Int) async {
+        let tasks = await session.allTasks
+        let identities = tasks.compactMap { task -> DownloadAttemptIdentity? in
+            guard let taskGUID = DownloadTaskIdentity.guid(fromTaskDescription: task.taskDescription)
+            else { return nil }
+            return DownloadAttemptIdentity(taskIdentifier: task.taskIdentifier, guid: taskGUID)
+        }
+        let identifiers = Set(
+            Self.taskIdentifiers(forGUID: guid, taskIdentifier: taskIdentifier, among: identities))
+        for task in tasks where identifiers.contains(task.taskIdentifier) {
+            task.cancel()
+        }
+    }
+
+    /// The value-returning core of attempt matching, testable without a session.
+    ///
+    /// The guid still has to match when an identifier is given: identifiers are
+    /// only unique within one session, and the caller's is read from an attempt
+    /// record that may have been retired since.
+    static func taskIdentifiers(
+        forGUID guid: String, taskIdentifier: Int, among identities: [DownloadAttemptIdentity]
+    ) -> [Int] {
+        identities
+            .filter { $0.guid == guid && $0.taskIdentifier == taskIdentifier }
+            .map(\.taskIdentifier)
     }
 
     // MARK: - Transfers

@@ -209,9 +209,9 @@ struct DownloadRowActionTests {
         #expect(downloadAction(for: .downloaded) == .delete)
     }
 
-    /// Nothing is offered mid-transfer: cancelling is not built, and deleting
+    /// A running transfer offers Cancel rather than Delete, because deleting
     /// under a running move is a race.
-    @Test func aRunningTransferOffersNothing() {
-        #expect(downloadAction(for: .downloading(.waiting)) == nil)
+    @Test func aRunningTransferOffersCancellation() {
+        #expect(downloadAction(for: .downloading(.waiting)) == .cancel)
     }
 }

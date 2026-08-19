@@ -46,7 +46,8 @@ struct CueApp: App {
             transport: BackgroundDownloader.shared.transport,
             // the transport's other half: the session counts an outcome as
             // handed over until the finish that follows it reports back
-            deliveryBarrier: { BackgroundDownloader.shared.completeDeliveredWork() }
+            deliveryBarrier: { BackgroundDownloader.shared.completeDeliveredWork() },
+            cancellationRequest: BackgroundDownloader.shared.cancellationRequest
         )
         // here rather than only in the scene's `.task`: a launch made purely to
         // deliver a finished background transfer may never present a scene, and

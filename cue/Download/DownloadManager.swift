@@ -42,6 +42,22 @@ final class DownloadManager {
     /// than with accounting nothing ever incremented.
     typealias DeliveryBarrier = @Sendable () -> Void
 
+    /// Requests cancellation of the background task a live attempt stands for.
+    ///
+    /// Injected beside `FileTransport` because an adopted transfer has no
+    /// in-process `Task` for the manager to cancel. The production seam
+    /// enumerates the background session; tests never construct one.
+    ///
+    /// Names the task, never only the guid. Enumerating the session suspends,
+    /// and by the time it answers this attempt may have retired and a retry may
+    /// hold the guid — matching on the guid alone would then cancel the
+    /// retry's task. The identifier is what makes the request attempt-scoped
+    /// rather than guid-scoped, exactly as the cancellation flag on the attempt
+    /// record already is. A guid-wide request is therefore not expressible:
+    /// an attempt with no task yet is cancelled by `registerStartedAttempt`
+    /// when one appears, not by a wildcard the snapshot resolves too late.
+    typealias CancellationRequest = @Sendable (String, Int) async -> Void
+
     /// What a given episode's transfer is doing right now. Absent means idle.
     enum DownloadState: Equatable {
         case downloading(DownloadProgress)
@@ -106,19 +122,23 @@ final class DownloadManager {
     let store: EpisodeStore
     private let transport: FileTransport
     private let deliveryBarrier: DeliveryBarrier
+    private let cancellationRequest: CancellationRequest
 
-    /// Spec §7 allows one active transfer; the rest wait their turn in order.
-    private var isTransferring = false
-    private var waiting: [CheckedContinuation<Void, Never>] = []
+    /// The transfer slot and its queued waiters. Internal only because the
+    /// queue itself lives in `DownloadQueue.swift`.
+    var isTransferring = false
+    var waiting: [TransferWaiter] = []
 
     init(
         context: ModelContext, store: EpisodeStore = EpisodeStore(),
-        transport: @escaping FileTransport, deliveryBarrier: @escaping DeliveryBarrier = {}
+        transport: @escaping FileTransport, deliveryBarrier: @escaping DeliveryBarrier = {},
+        cancellationRequest: @escaping CancellationRequest = { _, _ in }
     ) {
         self.context = context
         self.store = store
         self.transport = transport
         self.deliveryBarrier = deliveryBarrier
+        self.cancellationRequest = cancellationRequest
     }
 
     /// The state of this episode's transfer, or `nil` when it is not in flight.
@@ -160,14 +180,12 @@ final class DownloadManager {
         // "not downloaded", so the row keeps offering Download and a second tap
         // fetches the same episode twice
         states[guid] = .downloading(.waiting)
-        await acquireSlot()
-        defer { releaseSlot() }
 
         do {
-            // first, because the slot above can be waited on for a long time and
-            // `acquireSlot()` parks on a non-throwing continuation there is no
-            // cancelling out of: a caller the user backed out of while it was
-            // queued would otherwise wake up and run the whole transfer
+            try await acquireSlot(forGUID: guid)
+            defer { releaseSlot() }
+
+            // The task may have been cancelled before it acquired the slot.
             try Task.checkCancellation()
 
             // never assume launch succeeded: `CueApp.init()` prepares the
@@ -178,6 +196,7 @@ final class DownloadManager {
 
             // the guid rides with the request so the production transport can
             // stamp it on the task; a stub simply ignores it
+            try checkCancellation(of: guid, heldBy: token)
             let delivered: Result<(URL, URLResponse), Error>
             do {
                 delivered = .success(
@@ -189,6 +208,14 @@ final class DownloadManager {
             // everything below is work the background-events handler waits for
             defer { deliveryBarrier() }
 
+            do {
+                try checkCancellation(of: guid, heldBy: token)
+            } catch {
+                if case .success(let (tempURL, _)) = delivered {
+                    try? FileManager.default.removeItem(at: tempURL)
+                }
+                throw error
+            }
             let (tempURL, response) = try delivered.get()
             if let failure = Self.statusFailure(for: response, enclosureURL: enclosureURL) {
                 // the temporary file is ours once the transport answers, and an
@@ -197,7 +224,7 @@ final class DownloadManager {
                 throw failure
             }
 
-            try await finishDownload(tempURL: tempURL, response: response, forGUID: guid)
+            try await finishDownload(tempURL: tempURL, response: response, forGUID: guid, heldBy: token)
             // only while this transfer is still the guid's owner: a completion
             // routed from the session may have taken it over
             if releaseOwnership(of: guid, heldBy: token) { states[guid] = nil }
@@ -208,6 +235,47 @@ final class DownloadManager {
             }
             throw error
         }
+    }
+
+    /// Cancels the live attempt for `episode`, whether queued, active or adopted.
+    ///
+    /// A queued attempt has no session task, so its throwing continuation is
+    /// resumed here. An active or adopted attempt stays `.downloading` until the
+    /// delegate delivers its sole terminal outcome; requesting cancellation is
+    /// not a second outcome producer.
+    func cancel(_ episode: Episode) async {
+        let guid = episode.guid
+        guard var attempt = attempts[guid] else { return }
+        attempt.isCancellationRequested = true
+        attempts[guid] = attempt
+
+        if cancelWaiter({ $0.guid == guid }) {
+            if releaseOwnership(of: guid, heldBy: attempt.token) { states[guid] = nil }
+            return
+        }
+        // only a task this attempt owns may be named. An attempt whose session
+        // task has not registered yet has nothing to enumerate — the request
+        // is re-issued from `registerStartedAttempt` the moment it does, which
+        // is still before that task is resumed
+        guard let taskIdentifier = attempt.taskIdentifier else { return }
+        await cancellationRequest(guid, taskIdentifier)
+    }
+
+    /// Registers a started attempt's session task before it is resumed, and
+    /// carries over a cancellation that arrived before the task existed.
+    ///
+    /// The registration hop is asynchronous — the task is created off the main
+    /// actor and this record is written on it — so a `cancel(_:)` landing in
+    /// that window sees no identifier to name and requests nothing. This is
+    /// where that request is made instead, with the identifier now known, so
+    /// the transfer stops at the session rather than running to completion and
+    /// being discarded at the next checkpoint.
+    func registerStartedAttempt(taskIdentifier: Int, forGUID guid: String) async {
+        registerAttempt(taskIdentifier: taskIdentifier, forGUID: guid)
+        guard let attempt = attempts[guid], attempt.taskIdentifier == taskIdentifier,
+            attempt.isCancellationRequested
+        else { return }
+        await cancellationRequest(guid, taskIdentifier)
     }
 
     // MARK: - Background session
@@ -304,26 +372,4 @@ final class DownloadManager {
         return .failed(message: message)
     }
 
-    /// Waits until this call owns the single transfer slot.
-    ///
-    /// FIFO: a caller that finds the slot busy parks its continuation at the
-    /// back of `waiting`, and `releaseSlot()` hands the slot to the front. All
-    /// of it is main-actor state, so there is no lock to get wrong.
-    private func acquireSlot() async {
-        guard isTransferring else {
-            isTransferring = true
-            return
-        }
-        await withCheckedContinuation { continuation in
-            waiting.append(continuation)
-        }
-    }
-
-    private func releaseSlot() {
-        if waiting.isEmpty {
-            isTransferring = false
-        } else {
-            waiting.removeFirst().resume()
-        }
-    }
 }

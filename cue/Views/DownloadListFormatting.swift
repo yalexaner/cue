@@ -88,24 +88,25 @@ func episodeDownloadState(
     }
 }
 
-/// Whether the row's action starts a download or removes one.
+/// Whether the row's action starts, cancels or removes a download.
 ///
 /// One question with one answer, so the swipe action and the context menu cannot
-/// drift apart: an episode mid-transfer offers neither, because cancelling a
-/// transfer is not built and deleting under a running move is a race.
-func downloadAction(for state: EpisodeDownloadState) -> DownloadRowAction? {
+/// drift apart: an episode mid-transfer offers Cancel rather than Delete,
+/// because deleting under a running move is a race.
+func downloadAction(for state: EpisodeDownloadState) -> DownloadRowAction {
     switch state {
     case .notDownloaded, .failed:
         return .download
     case .downloaded:
         return .delete
     case .downloading:
-        return nil
+        return .cancel
     }
 }
 
 /// The one action an episode row offers for its file.
 enum DownloadRowAction: Equatable {
     case download
+    case cancel
     case delete
 }
