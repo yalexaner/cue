@@ -41,6 +41,12 @@ final class BackgroundDownloader: NSObject, @unchecked Sendable {
     /// that rode along in `taskDescription`.
     typealias OrphanedCompletion = @Sendable (Result<(URL, URLResponse), Error>, String) -> Void
 
+    /// Registers a task with the manager before the task can emit progress.
+    typealias AttemptRegistration = @Sendable (Int, String) async -> Void
+
+    /// One progress event mapped back to its episode identity.
+    typealias ProgressHandler = @Sendable (Int, String, DownloadProgress) -> Void
+
     /// An orphaned outcome that arrived before a handler was registered.
     private struct UnroutedCompletion {
         let result: Result<(URL, URLResponse), Error>
@@ -81,6 +87,8 @@ final class BackgroundDownloader: NSObject, @unchecked Sendable {
     let lock = NSLock()
     private var pending: [Int: TransferSlot] = [:]
     private var orphanedCompletion: OrphanedCompletion?
+    private var attemptRegistration: AttemptRegistration?
+    private var progressHandler: ProgressHandler?
     private var unroutedCompletions: [UnroutedCompletion] = []
     /// Delivered outcomes — awaited *and* orphaned — not yet reported finished.
     /// Internal only because its accounting methods live in
@@ -138,6 +146,16 @@ final class BackgroundDownloader: NSObject, @unchecked Sendable {
         }
     }
 
+    /// Installs the attempt-registration route used before `task.resume()`.
+    func setAttemptRegistrationHandler(_ handler: @escaping AttemptRegistration) {
+        lock.withLock { attemptRegistration = handler }
+    }
+
+    /// Installs the route for delegate byte callbacks.
+    func setProgressHandler(_ handler: @escaping ProgressHandler) {
+        lock.withLock { progressHandler = handler }
+    }
+
     /// The seam `DownloadManager` is constructed with in production.
     ///
     /// The guid is not a parameter of `FileTransport` — the transport answers a
@@ -155,8 +173,11 @@ final class BackgroundDownloader: NSObject, @unchecked Sendable {
     /// Called at launch: a download interrupted by termination is recovered from
     /// the session, never from the store (there is no column for it), so the
     /// manager repopulates its state map from what the system says is in flight.
-    func adoptInFlightTasks() async -> [String] {
-        await session.allTasks.compactMap { DownloadTaskIdentity.guid(fromTaskDescription: $0.taskDescription) }
+    func adoptInFlightTasks() async -> [DownloadAttemptIdentity] {
+        await session.allTasks.compactMap { task in
+            guard let guid = DownloadTaskIdentity.guid(fromTaskDescription: task.taskDescription) else { return nil }
+            return DownloadAttemptIdentity(taskIdentifier: task.taskIdentifier, guid: guid)
+        }
     }
 
     // MARK: - Transfers
@@ -167,8 +188,20 @@ final class BackgroundDownloader: NSObject, @unchecked Sendable {
         let taskIdentifier = task.taskIdentifier
 
         claimTransfer(taskIdentifier: taskIdentifier)
+        if let guid { await registerStart(taskIdentifier: taskIdentifier, guid: guid) }
         return try await awaitTransfer(
             taskIdentifier: taskIdentifier, onStart: { task.resume() }, onCancel: { task.cancel() })
+    }
+
+    /// Registers a task before the caller is allowed to resume it.
+    ///
+    /// Internal so the registration-before-progress ordering can be exercised
+    /// without constructing a background session.
+    func registerStart(taskIdentifier: Int, guid: String) async {
+        guard let registration = lock.withLock({ attemptRegistration }) else { return }
+        // `download(from:guid:)` awaits this before `awaitTransfer` reaches its
+        // `onStart`, so the attempt exists before the first byte callback
+        await registration(taskIdentifier, guid)
     }
 
     /// Reserves the slot a completion for this task identifier is routed to.
@@ -278,6 +311,18 @@ final class BackgroundDownloader: NSObject, @unchecked Sendable {
             return orphanedCompletion
         }
         handler?(result, guid)
+    }
+
+    /// Maps and reports a delegate byte callback without exposing a session
+    /// task, so progress delivery is testable without constructing a session.
+    func reportProgress(
+        taskIdentifier: Int, taskDescription: String?, bytesWritten: Int64,
+        expectedBytes: Int64
+    ) {
+        guard let guid = DownloadTaskIdentity.guid(fromTaskDescription: taskDescription) else { return }
+        guard let progress = DownloadProgress.reported(bytesWritten: bytesWritten, expectedBytes: expectedBytes)
+        else { return }
+        lock.withLock { progressHandler }?(taskIdentifier, guid, progress)
     }
 
     /// Moves the system's temporary file somewhere it will still exist after

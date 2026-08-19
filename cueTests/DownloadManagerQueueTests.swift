@@ -33,7 +33,7 @@ struct DownloadManagerQueueTests {
             await yieldUntil { gate.callCount == 1 }
 
             try #require(gate.callCount == 1)
-            #expect(manager.state(for: episode) == .downloading)
+            #expect(manager.state(for: episode) == .downloading(.waiting))
 
             gate.open()
             try await download.value
@@ -59,7 +59,7 @@ struct DownloadManagerQueueTests {
 
             // the second one is still waiting its turn, and says so
             #expect(gate.callCount == 1)
-            #expect(manager.state(for: second) == .downloading)
+            #expect(manager.state(for: second) == .downloading(.waiting))
 
             gate.open()
             try await firstDownload.value
@@ -92,12 +92,12 @@ struct DownloadManagerQueueTests {
 
             let download = Task { try await manager.download(episode) }
             await yieldUntil { gate.callCount == 1 }
-            try #require(manager.state(for: episode) == .downloading)
+            try #require(manager.state(for: episode) == .downloading(.waiting))
 
             // returns without queueing a second transfer, and without failing
             try await manager.download(episode)
             #expect(gate.callCount == 1)
-            #expect(manager.state(for: episode) == .downloading)
+            #expect(manager.state(for: episode) == .downloading(.waiting))
 
             gate.open()
             try await download.value

@@ -44,10 +44,20 @@ final class DownloadManager {
 
     /// What a given episode's transfer is doing right now. Absent means idle.
     enum DownloadState: Equatable {
-        case downloading
+        case downloading(DownloadProgress)
         /// The last attempt failed. Cleared by the next attempt, not by time —
         /// the row has to be able to show that trying again is worth a tap.
         case failed
+
+        var isDownloading: Bool {
+            if case .downloading = self { return true }
+            return false
+        }
+
+        var isFailed: Bool {
+            if case .failed = self { return true }
+            return false
+        }
     }
 
     /// The ways a download fails before the file is ever moved.
@@ -87,11 +97,10 @@ final class DownloadManager {
     /// `DownloadRelaunch.swift`.
     var resolvedGUIDs: Set<String> = []
 
-    /// Which in-process transfer owns each guid, as an identity rather than a
-    /// display state. Internal for the same reason `context` and `store` are:
-    /// the rules that read and write it live in `DownloadOwnership.swift`, which
-    /// is also where the reasoning is. In memory only, like `states`.
-    var owners: [String: UUID] = [:]
+    /// The one live attempt per guid. Internal because its lifecycle is split
+    /// across `DownloadOwnership.swift`, `DownloadAttempts.swift` and the
+    /// relaunch route. In memory only, like `states`.
+    var attempts: [String: DownloadAttempt] = [:]
 
     let context: ModelContext
     let store: EpisodeStore
@@ -135,7 +144,7 @@ final class DownloadManager {
         // of this is main-actor state, so the test and the set below cannot be
         // interleaved. A duplicate request is a no-op, not an error: the
         // transfer the user asked for is already running
-        guard states[guid] != .downloading else { return }
+        guard states[guid]?.isDownloading != true else { return }
         let enclosureURL = episode.enclosureURL
         guard let url = Self.downloadURL(for: enclosureURL) else {
             states[guid] = .failed
@@ -149,7 +158,7 @@ final class DownloadManager {
         // before the slot, not after: a queued transfer with no state reads as
         // "not downloaded", so the row keeps offering Download and a second tap
         // fetches the same episode twice
-        states[guid] = .downloading
+        states[guid] = .downloading(.waiting)
         await acquireSlot()
         defer { releaseSlot() }
 
@@ -213,7 +222,7 @@ final class DownloadManager {
     /// transfer already marked `.downloading` writes the same value.
     func connect(to downloader: BackgroundDownloader) async {
         registerCompletionRoute(with: downloader)
-        adopt(inFlightGUIDs: await downloader.adoptInFlightTasks())
+        adopt(inFlightAttempts: await downloader.adoptInFlightTasks())
     }
 
     // MARK: - Deleting
@@ -261,7 +270,7 @@ final class DownloadManager {
         // transfer for the same guid. The screens no longer offer a delete
         // mid-transfer, and this is the line that keeps that from mattering
         let previousState = states[episode.guid]
-        if previousState == .failed {
+        if previousState?.isFailed == true {
             states[episode.guid] = nil
         }
 

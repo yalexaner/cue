@@ -91,6 +91,18 @@ extension BackgroundDownloader {
 
 extension BackgroundDownloader: URLSessionDownloadDelegate {
     func urlSession(
+        _ session: URLSession, downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        reportProgress(
+            taskIdentifier: downloadTask.taskIdentifier,
+            taskDescription: downloadTask.taskDescription,
+            bytesWritten: totalBytesWritten,
+            expectedBytes: totalBytesExpectedToWrite)
+    }
+
+    func urlSession(
         _ session: URLSession,
         downloadTask: URLSessionDownloadTask,
         didFinishDownloadingTo location: URL

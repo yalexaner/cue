@@ -57,7 +57,7 @@ func diskUsageText(_ byteCount: Int) -> String {
 /// What an episode row should say about its file (spec §12's state indicators).
 enum EpisodeDownloadState: Equatable {
     case notDownloaded
-    case downloading
+    case downloading(DownloadProgress)
     case downloaded
     /// The last attempt failed; the row offers another try.
     case failed
@@ -78,8 +78,8 @@ func episodeDownloadState(
     transfer: DownloadManager.DownloadState?
 ) -> EpisodeDownloadState {
     switch transfer {
-    case .downloading:
-        return .downloading
+    case .downloading(let progress):
+        return .downloading(progress)
     case .failed:
         // a failed retry over an existing file is still a downloaded episode
         return localFilename == nil ? .failed : .downloaded

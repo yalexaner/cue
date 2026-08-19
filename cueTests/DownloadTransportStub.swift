@@ -24,6 +24,10 @@ final class DownloadTransportStub: @unchecked Sendable {
     private var inFlight = 0
     private var observedPeakInFlight = 0
     private var onAnswer: (@Sendable () -> Void)?
+    private var nextTaskIdentifier = 1
+    private var attemptRegistration: BackgroundDownloader.AttemptRegistration?
+    private var progressHandler: BackgroundDownloader.ProgressHandler?
+    private var answerProgress: DownloadProgress?
 
     init(data: Data = Data("audio".utf8), stagingDirectory: URL) {
         self.data = data
@@ -55,19 +59,39 @@ final class DownloadTransportStub: @unchecked Sendable {
         lock.withLock { self.onAnswer = body }
     }
 
+    /// Installs the same pre-start seam as the production downloader.
+    func setAttemptRegistrationHandler(_ handler: @escaping BackgroundDownloader.AttemptRegistration) {
+        lock.withLock { attemptRegistration = handler }
+    }
+
+    /// Installs the same progress seam as the production downloader.
+    func setProgressHandler(_ handler: @escaping BackgroundDownloader.ProgressHandler) {
+        lock.withLock { progressHandler = handler }
+    }
+
+    /// Emits this progress after registration and before the next answer.
+    func reportOnNextAnswer(_ progress: DownloadProgress) {
+        lock.withLock { answerProgress = progress }
+    }
+
     var transport: DownloadManager.FileTransport {
         { [self] url in
-            let (data, statusCode, error) = lock.withLock {
+            let (data, statusCode, error, taskIdentifier, registration) = lock.withLock {
                 self.urls.append(url)
                 self.inFlight += 1
                 self.observedPeakInFlight = max(self.observedPeakInFlight, self.inFlight)
-                return (self.data, self.statusCode, self.error)
+                let taskIdentifier = self.nextTaskIdentifier
+                self.nextTaskIdentifier += 1
+                return (self.data, self.statusCode, self.error, taskIdentifier, self.attemptRegistration)
             }
             // registered before the suspension, not after: nothing between the
             // increment and here throws today, but a `try` added above would
             // skip the decrement and quietly corrupt the peak this stub exists
             // to measure
             defer { lock.withLock { self.inFlight -= 1 } }
+            if let guid = DownloadTaskIdentity.currentGUID, let registration {
+                await registration(taskIdentifier, guid)
+            }
             // a real transfer suspends; without this every call would run to
             // completion before the next one started and overlap could not show
             await Task.yield()
@@ -82,6 +106,14 @@ final class DownloadTransportStub: @unchecked Sendable {
             let temporaryURL = stagingDirectory.appending(
                 path: "staged-\(UUID().uuidString).tmp", directoryHint: .notDirectory)
             try data.write(to: temporaryURL)
+            let (progress, progressHandler) = lock.withLock {
+                let progress = self.answerProgress
+                self.answerProgress = nil
+                return (progress, self.progressHandler)
+            }
+            if let guid = DownloadTaskIdentity.currentGUID, let progress {
+                progressHandler?(taskIdentifier, guid, progress)
+            }
             lock.withLock { self.onAnswer }?()
             return (temporaryURL, response)
         }

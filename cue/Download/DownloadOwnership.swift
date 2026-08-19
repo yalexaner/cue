@@ -4,11 +4,11 @@ import Foundation
 ///
 /// Its own file for the reason `DownloadFinish.swift` is — `DownloadManager.swift`
 /// sits at the 400-line `file_length` warning that `--strict` turns into an
-/// error, and ownership is a cohesive topic to lift out. That split is why
-/// `owners` is internal on the manager rather than private.
+/// error, and ownership is a cohesive topic to lift out. That split is why the
+/// manager's attempt records are internal rather than private.
 ///
-/// `states` cannot answer the question. `adopt(inFlightGUIDs:)` writes
-/// `.downloading` for transfers this process never started, so a bare
+/// `states` cannot answer the question. Adoption writes `.downloading` for
+/// transfers this process never started, so a bare
 /// "already downloading, back off" test would make the relaunch route discard
 /// exactly the completion `adopt` was anticipating. Ownership has to be an
 /// identity, not a display state.
@@ -32,10 +32,13 @@ extension DownloadManager {
     /// in-process transfer already holds it.
     ///
     /// All main-actor state, so the test and the write cannot interleave.
-    func claimOwnership(of guid: String) -> UUID? {
-        guard owners[guid] == nil else { return nil }
+    func claimOwnership(
+        of guid: String, origin: DownloadAttempt.Origin = .started,
+        taskIdentifier: Int? = nil
+    ) -> UUID? {
+        guard attempts[guid] == nil else { return nil }
         let token = UUID()
-        owners[guid] = token
+        attempts[guid] = DownloadAttempt(token: token, origin: origin, taskIdentifier: taskIdentifier)
         return token
     }
 
@@ -53,8 +56,8 @@ extension DownloadManager {
     /// `adoptingATransferAlreadyResolvedDoesNotResurrectIt` exists to prevent,
     /// reintroduced from the other side. A `false` means write nothing.
     func releaseOwnership(of guid: String, heldBy token: UUID) -> Bool {
-        guard owners[guid] == token else { return false }
-        owners[guid] = nil
+        guard attempts[guid]?.token == token else { return false }
+        attempts[guid] = nil
         return true
     }
 }

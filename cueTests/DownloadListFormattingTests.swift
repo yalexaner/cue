@@ -169,8 +169,21 @@ struct EpisodeDownloadStateTests {
 
     /// A transfer in flight outranks the file it is about to replace.
     @Test func aTransferInFlightOutranksAStoredFilename() {
-        #expect(episodeDownloadState(localFilename: "a.mp3", transfer: .downloading) == .downloading)
-        #expect(episodeDownloadState(localFilename: nil, transfer: .downloading) == .downloading)
+        #expect(
+            episodeDownloadState(localFilename: "a.mp3", transfer: .downloading(.waiting))
+                == .downloading(.waiting))
+        #expect(
+            episodeDownloadState(localFilename: nil, transfer: .downloading(.waiting))
+                == .downloading(.waiting))
+        #expect(
+            episodeDownloadState(
+                localFilename: nil, transfer: .downloading(.indeterminate(bytesWritten: 12)))
+                == .downloading(.indeterminate(bytesWritten: 12)))
+        #expect(
+            episodeDownloadState(
+                localFilename: nil,
+                transfer: .downloading(.fraction(bytesWritten: 50, value: 0.5)))
+                == .downloading(.fraction(bytesWritten: 50, value: 0.5)))
     }
 
     /// A failed retry over a file that is still there is not a failed episode.
@@ -194,6 +207,6 @@ struct DownloadRowActionTests {
     /// Nothing is offered mid-transfer: cancelling is not built, and deleting
     /// under a running move is a race.
     @Test func aRunningTransferOffersNothing() {
-        #expect(downloadAction(for: .downloading) == nil)
+        #expect(downloadAction(for: .downloading(.waiting)) == nil)
     }
 }
