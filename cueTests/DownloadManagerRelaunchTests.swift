@@ -8,7 +8,7 @@ import Testing
 /// failed, without a continuation to answer.
 ///
 /// The route is exercised through `handleCompletion(_:forGUID:)` and
-/// `adopt(inFlightGUIDs:)` rather than through `connect(to:)`, so no test
+/// `adopt(inFlightAttempts:)` rather than through `connect(to:)`, so no test
 /// constructs a real background session.
 @MainActor
 struct DownloadManagerRelaunchTests {
@@ -72,7 +72,8 @@ struct DownloadManagerRelaunchTests {
             let context = try makeContext()
             let episode = try makeEpisode(in: context)
             let manager = makeManager(context: context, base: base)
-            manager.adopt(inFlightGUIDs: ["guid-1"])
+            manager.adopt(
+                inFlightAttempts: [DownloadAttemptIdentity(taskIdentifier: 1, guid: "guid-1")])
 
             await manager.handleCompletion(.failure(StubTransportError.offline), forGUID: "guid-1")
 
@@ -86,7 +87,8 @@ struct DownloadManagerRelaunchTests {
             let context = try makeContext()
             let episode = try makeEpisode(in: context)
             let manager = makeManager(context: context, base: base)
-            manager.adopt(inFlightGUIDs: ["guid-1"])
+            manager.adopt(
+                inFlightAttempts: [DownloadAttemptIdentity(taskIdentifier: 1, guid: "guid-1")])
 
             await manager.handleCompletion(.failure(CancellationError()), forGUID: "guid-1")
 
@@ -138,7 +140,8 @@ struct DownloadManagerRelaunchTests {
             let staged = try stagedFile(in: base)
 
             await manager.handleCompletion(.success((staged, try response(200))), forGUID: "guid-1")
-            manager.adopt(inFlightGUIDs: ["guid-1"])
+            manager.adopt(
+                inFlightAttempts: [DownloadAttemptIdentity(taskIdentifier: 1, guid: "guid-1")])
 
             #expect(manager.state(for: episode) == nil)
         }
@@ -189,9 +192,10 @@ struct DownloadManagerRelaunchTests {
             let episode = try makeEpisode(in: context)
             let manager = makeManager(context: context, base: base)
 
-            manager.adopt(inFlightGUIDs: ["guid-1"])
+            manager.adopt(
+                inFlightAttempts: [DownloadAttemptIdentity(taskIdentifier: 1, guid: "guid-1")])
 
-            #expect(manager.state(for: episode) == .downloading)
+            #expect(manager.state(for: episode) == .downloading(.waiting))
         }
     }
 }

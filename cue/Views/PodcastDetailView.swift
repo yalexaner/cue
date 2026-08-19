@@ -204,9 +204,8 @@ private struct EpisodeRow: View {
     @ViewBuilder
     private var downloadIndicator: some View {
         switch downloadState {
-        case .downloading:
-            ProgressView()
-                .accessibilityLabel("Downloading")
+        case .downloading(let progress):
+            downloadProgress(progress)
         case .downloaded:
             Image(systemName: "arrow.down.circle.fill")
                 .foregroundStyle(.secondary)
@@ -217,6 +216,25 @@ private struct EpisodeRow: View {
                 .accessibilityLabel("Download Failed")
         case .notDownloaded:
             EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func downloadProgress(_ progress: DownloadProgress) -> some View {
+        switch progress {
+        case .waiting:
+            Text("Waiting…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Download Waiting")
+        case .indeterminate:
+            ProgressView()
+                .accessibilityLabel("Downloading")
+        case .fraction(_, let value):
+            ProgressView(value: value)
+                .frame(width: 48)
+                .accessibilityLabel("Downloading")
+                .accessibilityValue(value.formatted(.percent.precision(.fractionLength(0))))
         }
     }
 }

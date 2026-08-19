@@ -9,6 +9,14 @@ extension DownloadManager {
     /// never present a scene, and a completion with nowhere to go is a finished
     /// download thrown away.
     func registerCompletionRoute(with downloader: BackgroundDownloader) {
+        downloader.setAttemptRegistrationHandler { [weak self] taskIdentifier, guid in
+            await self?.registerAttempt(taskIdentifier: taskIdentifier, forGUID: guid)
+        }
+        downloader.setProgressHandler { [weak self] taskIdentifier, guid, progress in
+            Task { @MainActor [weak self] in
+                self?.handleProgress(taskIdentifier: taskIdentifier, guid: guid, progress: progress)
+            }
+        }
         downloader.setOrphanedCompletionHandler { [weak self] result, guid in
             Task { @MainActor [weak self] in
                 // the system may suspend the app once the downloader answers
@@ -47,14 +55,20 @@ extension DownloadManager {
         // tradeoff is deliberate — if that transfer later fails a finished
         // download is thrown away and the user retries, which beats a deleted
         // download reappearing
-        guard let token = claimOwnership(of: guid) else {
+        let token: UUID
+        if let attempt = attempts[guid], attempt.origin == .adopted {
+            token = attempt.token
+        } else if let attempt = attempts[guid], attempt.origin == .started {
             if case .success(let (tempURL, _)) = result {
                 Self.logger.notice("completion for a guid already in flight here; discarding the file")
                 try? FileManager.default.removeItem(at: tempURL)
             }
             return
+        } else {
+            guard let claimed = claimOwnership(of: guid, origin: .adopted) else { return }
+            token = claimed
         }
-        states[guid] = .downloading
+        states[guid] = .downloading(attempts[guid]?.progress ?? .waiting)
         do {
             switch result {
             case .success(let (tempURL, response)):
@@ -80,9 +94,15 @@ extension DownloadManager {
     /// A guid already resolved is skipped: the session's answer is a snapshot
     /// taken before an `await`, so a completion routed in the meantime would
     /// otherwise be overwritten with a `.downloading` nothing clears.
-    func adopt(inFlightGUIDs guids: [String]) {
-        for guid in guids where !resolvedGUIDs.contains(guid) {
-            states[guid] = .downloading
+    func adopt(inFlightAttempts identities: [DownloadAttemptIdentity]) {
+        for identity in identities where !resolvedGUIDs.contains(identity.guid) {
+            guard attempts[identity.guid] == nil else { continue }
+            guard
+                claimOwnership(
+                    of: identity.guid, origin: .adopted,
+                    taskIdentifier: identity.taskIdentifier) != nil
+            else { continue }
+            states[identity.guid] = .downloading(.waiting)
         }
     }
 }
