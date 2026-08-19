@@ -561,6 +561,43 @@ file (AC 8).
 
 ---
 
+## 4.5 Download diagnosability and transfer visibility
+
+**Goal.** Make every background transfer observable, actionable and bounded,
+including plain-http feeds and enclosures.
+
+**Files.** `Support/Info.plist`, `Download/BackgroundDownloader.swift`,
+`Download/BackgroundDownloaderDelegate.swift`, `Download/DownloadManager.swift`,
+`Download/DownloadAttempts.swift`, `Download/DownloadProgress.swift`,
+`Download/DownloadQueue.swift`, `Download/DownloadRelaunch.swift`,
+`Views/DownloadsView.swift`, `Views/ActiveDownloadFormatting.swift`,
+`Views/PodcastDetailView.swift`
+
+**Tasks.**
+
+1. Allow arbitrary HTTP loads so user-supplied plain-http feeds and enclosures
+   are not rejected by ATS.
+2. Report byte progress as waiting, determinate or indeterminate state, kept in
+   memory and guarded by the live transfer attempt.
+3. Keep a safe failure message on failed rows, including background completions,
+   without rendering a raw error description or credential-bearing enclosure URL.
+4. Let the user cancel queued, active and adopted transfers by episode guid, and
+   bound abandoned transfers with a two-hour resource timeout.
+5. Show all in-flight and failed transfers in an Active Transfers section on the
+   Downloads tab, with progress, cancel, failure detail and retry actions; the
+   podcast detail rows gain the same progress, cancel and failure detail.
+6. Split the two download files that sat against the 400-line `file_length`
+   limit by topic, before any behaviour change.
+
+**Acceptance.** A plain-http enclosure can download. A transfer visibly moves
+from waiting to byte progress, can be cancelled even after relaunch, and surfaces
+a safe actionable failure. The Downloads tab shows every active or failed
+transfer while its completed list remains based on file presence only.
+
+**Commit.** `feat(downloads): progress, failure detail and cancel`
+
+---
+
 ## 5 Playback
 
 **Goal.** Audio plays from local files, offline, with correct lock-screen

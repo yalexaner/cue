@@ -233,11 +233,25 @@ feed URLs by hand.
   `assetDuration`.
 - Serial queue, one active download at a time. Sufficient for one user.
 - Manual trigger only. Tap an episode → Download. No auto-download rules.
+- Transfer progress is in-memory and has three visible states: waiting for the
+  first byte, determinate when the total size is known, and indeterminate when
+  bytes are arriving without a known total. Progress belongs to one registered
+  transfer attempt; a delayed update from an older attempt must be ignored.
+- A transfer can be cancelled while queued, active, or adopted after relaunch.
+  Cancellation is addressed by episode guid because an adopted transfer has no
+  in-process task handle. A two-hour resource timeout bounds abandoned transfers.
+- A failed transfer keeps a safe user-facing message and offers retry. HTTP
+  failures name the status and at most the enclosure URL's scheme and host;
+  arbitrary error descriptions are never rendered because they may contain a
+  private-feed credential.
 - Delete clears `localFilename` and `downloadedAt`, removes the file, and leaves
   `isPlayed` and all sessions untouched.
 
-Downloads view lists episodes where `isDownloaded == true`. It filters on file
-presence **only** — never on played state.
+The Downloads view begins with an Active Transfers section containing every
+in-flight and failed transfer, with progress, cancel, failure detail, and retry.
+Below it, the completed-download list contains episodes where
+`isDownloaded == true`; that list filters on file presence **only** — never on
+played state. Transfer and failure state are not persisted in SwiftData.
 
 ---
 
@@ -362,14 +376,17 @@ Five screens, stock components throughout.
 1. **Library** — list of podcasts, artwork + title. Pull to refresh. Toolbar: add
    feed (URL paste), import OPML.
 2. **Podcast detail** — episode list, newest first. Per row: title, date, duration,
-   and state indicators for downloaded / played. Actions: download, delete
-   download, mark played/unplayed, play.
+   and state indicators for downloading (waiting, or progress), downloaded,
+   failed (tap for the failure detail) and played. Actions: download, cancel
+   download, delete download, mark played/unplayed, play.
 3. **Player** — artwork, title, elapsed/remaining, progress slider (enabled
    in-app; only the lock-screen scrubber is disabled), play/pause, ±30s, rate
    picker, sleep timer, link to history.
 4. **History** — session list for the current episode, tap to revert.
-5. **Downloads** — every episode with a local file, grouped by podcast, with total
-   disk usage. Filtered on file presence only.
+5. **Downloads** — an Active Transfers section for every in-flight or failed
+   transfer, with progress, cancel, failure detail, and retry; followed by every
+   episode with a local file, grouped by podcast, with total disk usage. The
+   completed list is filtered on file presence only.
 
 A persistent mini-player above the tab bar when something is loaded.
 
