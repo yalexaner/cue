@@ -76,14 +76,22 @@ final class BackgroundDownloader: NSObject, @unchecked Sendable {
         category: "downloads"
     )
 
-    private let lock = NSLock()
+    /// Internal only because background-event accounting lives in
+    /// `BackgroundDownloaderDelegate.swift`; all access remains lock-scoped.
+    let lock = NSLock()
     private var pending: [Int: TransferSlot] = [:]
     private var orphanedCompletion: OrphanedCompletion?
     private var unroutedCompletions: [UnroutedCompletion] = []
     /// Delivered outcomes — awaited *and* orphaned — not yet reported finished.
-    private var deliveredWorkInFlight = 0
-    private var backgroundEventsCompletions: [@Sendable () -> Void] = []
-    private var backgroundEventsDelivered = false
+    /// Internal only because its accounting methods live in
+    /// `BackgroundDownloaderDelegate.swift`.
+    var deliveredWorkInFlight = 0
+    /// Internal only because background-event accounting lives in
+    /// `BackgroundDownloaderDelegate.swift`.
+    var backgroundEventsCompletions: [@Sendable () -> Void] = []
+    /// Internal only because background-event accounting lives in
+    /// `BackgroundDownloaderDelegate.swift`.
+    var backgroundEventsDelivered = false
     private var storedSession: URLSession?
 
     /// Created once, on first use, and never torn down. Recreating a session
@@ -95,7 +103,10 @@ final class BackgroundDownloader: NSObject, @unchecked Sendable {
     /// app delegate on the main thread, the transport off it. Two sessions
     /// sharing one background identifier is the runtime error this type exists
     /// to prevent.
-    private var session: URLSession {
+    ///
+    /// Internal only because background-event registration lives in
+    /// `BackgroundDownloaderDelegate.swift`.
+    var session: URLSession {
         lock.withLock { () -> URLSession in
             if let storedSession { return storedSession }
             let configuration = URLSessionConfiguration.background(withIdentifier: Self.sessionIdentifier)
@@ -148,91 +159,6 @@ final class BackgroundDownloader: NSObject, @unchecked Sendable {
         await session.allTasks.compactMap { DownloadTaskIdentity.guid(fromTaskDescription: $0.taskDescription) }
     }
 
-    /// Stores the handler UIKit hands over when it relaunches us for a finished
-    /// background transfer. Called back once the session says it has delivered
-    /// every event it had.
-    func registerBackgroundEventsCompletion(_ handler: @escaping @Sendable () -> Void) {
-        callOnMain(storeBackgroundEventsCompletion(handler))
-        // touching the session is what recreates it, and recreating it is what
-        // makes the queued delegate callbacks arrive
-        _ = session
-    }
-
-    /// Stores a handler and answers the ones that may be called right now.
-    ///
-    /// Handlers queue rather than replace each other: answering a replaced one
-    /// inline reports "safe to suspend" while a delivered outcome is still being
-    /// finished, which is the suspension the accounting exists to prevent. A
-    /// handler registered *after* its events were already delivered is ready
-    /// immediately — the suspended-not-terminated order, where the session was
-    /// alive and finished its work before UIKit handed the handler over.
-    ///
-    /// Internal, and value-returning, so the accounting is testable without
-    /// constructing a background session.
-    func storeBackgroundEventsCompletion(_ handler: @escaping @Sendable () -> Void) -> [@Sendable () -> Void] {
-        lock.withLock {
-            backgroundEventsCompletions.append(handler)
-            return takeBackgroundEventsCompletionsIfReady()
-        }
-    }
-
-    /// Reports that the work for one delivered outcome has finished.
-    ///
-    /// The system may suspend the app as soon as the stored UIKit handler is
-    /// called, so it is called only once every delivered outcome has been dealt
-    /// with. Calling it while a finish is still moving a file is how a claimed
-    /// download ends up abandoned in `tmp` with nothing recorded — and that is
-    /// as true of an outcome answered through a live continuation (the app was
-    /// merely suspended, not terminated) as of an orphaned one, so both routes
-    /// are counted and both call this.
-    func completeDeliveredWork() {
-        callOnMain(finishDeliveredWork())
-    }
-
-    /// The value-returning core of `completeDeliveredWork()`.
-    func finishDeliveredWork() -> [@Sendable () -> Void] {
-        lock.withLock {
-            deliveredWorkInFlight = max(0, deliveredWorkInFlight - 1)
-            return takeBackgroundEventsCompletionsIfReady()
-        }
-    }
-
-    /// Records that the session has delivered every event it had, and answers
-    /// the handlers that may be called now.
-    func noteBackgroundEventsDelivered() -> [@Sendable () -> Void] {
-        lock.withLock {
-            backgroundEventsDelivered = true
-            return takeBackgroundEventsCompletionsIfReady()
-        }
-    }
-
-    /// The stored UIKit handlers, once the session has delivered every event and
-    /// nothing is still being finished. The lock must be held.
-    ///
-    /// The delivered signal is consumed only when handlers actually leave:
-    /// clearing it for an empty queue throws away the one edge a handler
-    /// registered a moment later is waiting for, and that handler is then never
-    /// called — the app keeps its background assertion until the watchdog takes
-    /// it away.
-    private func takeBackgroundEventsCompletionsIfReady() -> [@Sendable () -> Void] {
-        guard backgroundEventsDelivered, deliveredWorkInFlight == 0, !backgroundEventsCompletions.isEmpty
-        else { return [] }
-        let handlers = backgroundEventsCompletions
-        backgroundEventsCompletions = []
-        backgroundEventsDelivered = false
-        return handlers
-    }
-
-    /// UIKit requires its handlers on the main thread.
-    private func callOnMain(_ handlers: [@Sendable () -> Void]) {
-        guard !handlers.isEmpty else { return }
-        Task { @MainActor in
-            for handler in handlers {
-                handler()
-            }
-        }
-    }
-
     // MARK: - Transfers
 
     private func download(from url: URL, guid: String?) async throws -> (URL, URLResponse) {
@@ -283,7 +209,10 @@ final class BackgroundDownloader: NSObject, @unchecked Sendable {
     }
 
     /// Hands a finished transfer to whoever is waiting, or to the orphan route.
-    private func deliver(_ result: Result<(URL, URLResponse), Error>, for task: URLSessionTask) {
+    ///
+    /// Internal only because the session delegate lives in
+    /// `BackgroundDownloaderDelegate.swift`.
+    func deliver(_ result: Result<(URL, URLResponse), Error>, for task: URLSessionTask) {
         deliver(result, forTaskIdentifier: task.taskIdentifier, taskDescription: task.taskDescription)
     }
 
@@ -353,44 +282,13 @@ final class BackgroundDownloader: NSObject, @unchecked Sendable {
 
     /// Moves the system's temporary file somewhere it will still exist after
     /// this delegate callback returns.
-    private static func claim(_ location: URL) throws -> URL {
+    ///
+    /// Internal only because the session delegate lives in
+    /// `BackgroundDownloaderDelegate.swift`.
+    static func claim(_ location: URL) throws -> URL {
         let claimed = FileManager.default.temporaryDirectory.appending(
             path: "download-\(UUID().uuidString).tmp", directoryHint: .notDirectory)
         try FileManager.default.moveItem(at: location, to: claimed)
         return claimed
-    }
-}
-
-// MARK: - URLSessionDownloadDelegate
-
-extension BackgroundDownloader: URLSessionDownloadDelegate {
-    func urlSession(
-        _ session: URLSession,
-        downloadTask: URLSessionDownloadTask,
-        didFinishDownloadingTo location: URL
-    ) {
-        // claimed here, synchronously, because `location` is deleted as soon as
-        // this method returns
-        do {
-            let claimed = try Self.claim(location)
-            deliver(.success((claimed, downloadTask.response ?? URLResponse())), for: downloadTask)
-        } catch {
-            deliver(.failure(error), for: downloadTask)
-        }
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        // a successful download already answered from `didFinishDownloadingTo`
-        // and took its continuation with it, so this only has work to do when
-        // the transfer failed
-        guard let error else { return }
-        deliver(.failure(error), for: task)
-    }
-
-    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
-        // every event is delivered, but the work they started may still be
-        // running, and the handler may not have been handed over yet;
-        // `completeDeliveredWork()` and the registration answer those cases
-        callOnMain(noteBackgroundEventsDelivered())
     }
 }
