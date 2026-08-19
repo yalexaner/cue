@@ -106,6 +106,8 @@ struct DownloadManagerRelaunchTests {
             await manager.handleCompletion(.success((staged, try response(200))), forGUID: "no-such-guid")
 
             #expect(!FileManager.default.fileExists(atPath: staged.path(percentEncoded: false)))
+            #expect(manager.states["no-such-guid"] == nil)
+            #expect(manager.attempts["no-such-guid"] == nil)
         }
     }
 
