@@ -88,7 +88,10 @@ struct DownloadManagerTests {
             }
             #expect(stub.requestedURLStrings.isEmpty)
             #expect(episode.localFilename == nil)
-            #expect(manager.state(for: episode) == .failed)
+            let message = try #require(
+                downloadErrorMessage(
+                    for: DownloadManager.Failure.invalidEnclosureURL("file:///etc/passwd")))
+            #expect(manager.state(for: episode) == .failed(message: message))
         }
     }
 
@@ -109,7 +112,10 @@ struct DownloadManagerTests {
 
             #expect(episode.localFilename == nil)
             #expect(episode.downloadedAt == nil)
-            #expect(manager.state(for: episode) == .failed)
+            let message = try #require(
+                downloadErrorMessage(
+                    for: DownloadManager.Failure.httpStatus(403, Self.enclosureURL)))
+            #expect(manager.state(for: episode) == .failed(message: message))
             let stored = try persistedEpisode(guid: "guid-1", in: context)
             let persisted = try #require(stored)
             #expect(persisted.localFilename == nil)
@@ -128,7 +134,8 @@ struct DownloadManagerTests {
                 try await manager.download(episode)
             }
             #expect(episode.localFilename == nil)
-            #expect(manager.state(for: episode) == .failed)
+            let message = try #require(downloadErrorMessage(for: StubTransportError.offline))
+            #expect(manager.state(for: episode) == .failed(message: message))
         }
     }
 
@@ -176,7 +183,11 @@ struct DownloadManagerTests {
 
             #expect(episode.localFilename == nil)
             #expect(episode.downloadedAt == nil)
-            #expect(manager.state(for: episode) == .failed)
+            #expect(
+                manager.state(for: episode)
+                    == .failed(
+                        message:
+                            "The download file could not be read or written. Check available storage and try again."))
             let stored = try persistedEpisode(guid: "guid-1", in: context)
             let persisted = try #require(stored)
             #expect(persisted.localFilename == nil)

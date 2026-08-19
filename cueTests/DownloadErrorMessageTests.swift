@@ -6,6 +6,11 @@ import Testing
 /// What the download alert says. The feed mapper's own cases are
 /// `FeedErrorMessageTests`; these are the download-only half.
 struct DownloadErrorMessageTests {
+    private struct TokenBearingError: LocalizedError {
+        var errorDescription: String? {
+            "Request failed for https://example.com/feed?token=REDACTED_TEST_TOKEN"
+        }
+    }
 
     /// The Boosty case: a rotated token answers 403, and the alert has to say so
     /// or the user has nothing to act on (spec §6). What it must not say is the
@@ -39,14 +44,20 @@ struct DownloadErrorMessageTests {
         #expect(downloadErrorMessage(for: URLError(.cancelled)) == nil)
     }
 
-    /// Anything the download layer does not own keeps its own description rather
-    /// than being flattened into an invented sentence.
-    @Test func unknownErrorsFallBackToTheirDescription() throws {
-        let error = URLError(.timedOut)
-        let message = try #require(downloadErrorMessage(for: error))
+    @Test func networkErrorsUseAFixedCategoryMessage() throws {
+        let message = try #require(downloadErrorMessage(for: URLError(.timedOut)))
 
-        #expect(message == error.localizedDescription)
-        #expect(!message.isEmpty)
+        #expect(message == "The download could not reach the server. Check your connection and try again.")
+    }
+
+    /// A transport can put the token-bearing enclosure URL in its arbitrary
+    /// description. Unknown categories must not pass that text through.
+    @Test func arbitraryErrorDescriptionsCannotExposeAnEnclosureURL() throws {
+        let message = try #require(downloadErrorMessage(for: TokenBearingError()))
+
+        #expect(message == "The download failed. Please try again.")
+        #expect(!message.contains("/feed"))
+        #expect(!message.contains("REDACTED_TEST_TOKEN"))
     }
 }
 

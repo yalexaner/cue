@@ -188,8 +188,13 @@ struct EpisodeDownloadStateTests {
 
     /// A failed retry over a file that is still there is not a failed episode.
     @Test func failureShowsOnlyWhenThereIsNoFile() {
-        #expect(episodeDownloadState(localFilename: nil, transfer: .failed) == .failed)
-        #expect(episodeDownloadState(localFilename: "a.mp3", transfer: .failed) == .downloaded)
+        let message = "The download failed."
+        #expect(
+            episodeDownloadState(localFilename: nil, transfer: .failed(message: message))
+                == .failed(message: message))
+        #expect(
+            episodeDownloadState(localFilename: "a.mp3", transfer: .failed(message: message))
+                == .downloaded)
     }
 }
 
@@ -197,7 +202,7 @@ struct DownloadRowActionTests {
 
     @Test func anAbsentOrFailedDownloadOffersDownloading() {
         #expect(downloadAction(for: .notDownloaded) == .download)
-        #expect(downloadAction(for: .failed) == .download)
+        #expect(downloadAction(for: .failed(message: "The download failed.")) == .download)
     }
 
     @Test func aPresentDownloadOffersDeleting() {

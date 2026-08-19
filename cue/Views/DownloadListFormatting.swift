@@ -60,7 +60,7 @@ enum EpisodeDownloadState: Equatable {
     case downloading(DownloadProgress)
     case downloaded
     /// The last attempt failed; the row offers another try.
-    case failed
+    case failed(message: String)
 }
 
 /// The row's download state, from the stored filename and the in-flight transfer.
@@ -80,9 +80,9 @@ func episodeDownloadState(
     switch transfer {
     case .downloading(let progress):
         return .downloading(progress)
-    case .failed:
+    case .failed(let message):
         // a failed retry over an existing file is still a downloaded episode
-        return localFilename == nil ? .failed : .downloaded
+        return localFilename == nil ? .failed(message: message) : .downloaded
     case nil:
         return localFilename == nil ? .notDownloaded : .downloaded
     }

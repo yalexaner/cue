@@ -181,6 +181,8 @@ private struct EpisodeRow: View {
     let episode: Episode
     let downloadState: EpisodeDownloadState
 
+    @State private var isFailurePresented = false
+
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
@@ -210,10 +212,21 @@ private struct EpisodeRow: View {
             Image(systemName: "arrow.down.circle.fill")
                 .foregroundStyle(.secondary)
                 .accessibilityLabel("Downloaded")
-        case .failed:
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-                .accessibilityLabel("Download Failed")
+        case .failed(let message):
+            Button {
+                isFailurePresented = true
+            } label: {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Download Failed")
+            .accessibilityHint("Shows failure details")
+            .alert("Download Failed", isPresented: $isFailurePresented) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(message)
+            }
         case .notDownloaded:
             EmptyView()
         }

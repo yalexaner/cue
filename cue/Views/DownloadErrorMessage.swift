@@ -27,11 +27,18 @@ func downloadErrorMessage(for error: Error) -> String? {
         return message(for: failure)
     case let failure as EpisodeStore.Failure:
         return message(for: failure)
+    case is URLError:
+        return "The download could not reach the server. Check your connection and try again."
+    case is CocoaError:
+        // this mapper also answers the Downloads screen's disk scan and its
+        // delete, so the sentence has to fit a file that could not be read or
+        // removed as well as one that could not be written
+        return "The download file could not be read or written. Check available storage and try again."
     default:
-        // transport errors (`URLError`, ATS rejections) and storage errors
-        // propagate unwrapped, and their own descriptions beat anything
-        // invented here
-        return error.localizedDescription
+        // An arbitrary error description can contain its failing URL, including
+        // a pre-signed enclosure credential. Unknown categories therefore get
+        // a fixed sentence instead of a pass-through description.
+        return "The download failed. Please try again."
     }
 }
 
