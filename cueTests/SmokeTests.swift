@@ -8,6 +8,15 @@ struct SmokeTests {
         #expect(Bool(true))
     }
 
+    @Test func appAllowsArbitraryNetworkLoads() {
+        // read as `[String: Any]`: a later per-domain `NSExceptionDomains`
+        // entry is a nested dictionary, and a `[String: Bool]` cast would fail
+        // the whole assertion over a key this test is not about
+        let appTransportSecurity =
+            Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any]
+        #expect(appTransportSecurity?["NSAllowsArbitraryLoads"] as? Bool == true)
+    }
+
     @Test func fixturesLoadAsData() throws {
         #expect(!(try fixtureData(named: "durations", withExtension: "rss")).isEmpty)
         #expect(!(try fixtureData(named: "itunes", withExtension: "rss")).isEmpty)
