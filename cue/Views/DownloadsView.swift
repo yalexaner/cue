@@ -20,6 +20,7 @@ struct DownloadsView: View {
     @State private var hasScanned = false
     @State private var storageErrorMessage: String?
     @State private var deleteErrorMessage: String?
+    @State private var transferErrorMessage: String?
 
     private let store = EpisodeStore()
 
@@ -50,8 +51,36 @@ struct DownloadsView: View {
         }
     }
 
+    /// Derived directly from the observed transfer map, not from the disk-scan
+    /// cache: byte progress changes no persisted episode field.
+    /// Nothing in flight is the common case, and the body is re-evaluated for
+    /// every episode change: the library is walked only when there is at least
+    /// one transfer to resolve, and only its guids are kept.
+    private var activeTransfers: [ActiveDownload] {
+        let states = downloads.states
+        guard !states.isEmpty else { return [] }
+        var episodesByGUID: [String: Episode] = [:]
+        for episode in episodes where states[episode.guid] != nil {
+            episodesByGUID[episode.guid] = episode
+        }
+        return activeDownloads(episodesByGUID: episodesByGUID, states: states)
+    }
+
     var body: some View {
+        let activeTransfers = activeTransfers
         List {
+            if !activeTransfers.isEmpty {
+                Section("Active Transfers") {
+                    ForEach(activeTransfers) { transfer in
+                        ActiveDownloadRow(transfer: transfer) {
+                            transferButton(for: transfer)
+                        }
+                        .swipeActions(edge: .trailing) { transferButton(for: transfer) }
+                        .contextMenu { transferButton(for: transfer) }
+                    }
+                }
+            }
+
             ForEach(groups) { group in
                 Section {
                     ForEach(group.episodes) { episode in
@@ -76,7 +105,7 @@ struct DownloadsView: View {
         .overlay {
             // only when the scan actually succeeded and found nothing: an empty
             // screen must never be how a storage failure looks
-            if hasScanned && groups.isEmpty && storageErrorMessage == nil {
+            if hasScanned && groups.isEmpty && activeTransfers.isEmpty && storageErrorMessage == nil {
                 ContentUnavailableView(
                     "No Downloads",
                     systemImage: "arrow.down.circle",
@@ -88,6 +117,29 @@ struct DownloadsView: View {
         .onChange(of: downloadSignature, initial: true) { rebuild() }
         .errorAlert("Could Not Read Downloads", $storageErrorMessage)
         .errorAlert("Could Not Delete", $deleteErrorMessage)
+        .errorAlert("Download Failed", $transferErrorMessage)
+    }
+
+    /// The active row's one transfer action, shared by its visible button,
+    /// swipe action and context menu.
+    @ViewBuilder
+    private func transferButton(for transfer: ActiveDownload) -> some View {
+        switch downloadAction(for: transfer.rowState) {
+        case .download:
+            Button {
+                retry(transfer.episode)
+            } label: {
+                Label("Retry Download", systemImage: "arrow.clockwise")
+            }
+        case .cancel:
+            Button(role: .destructive) {
+                Task { await downloads.cancel(transfer.episode) }
+            } label: {
+                Label("Cancel Download", systemImage: "xmark.circle")
+            }
+        case .delete:
+            EmptyView()
+        }
     }
 
     /// The row's one file action, written once so the swipe action and the
@@ -161,6 +213,66 @@ struct DownloadsView: View {
         // either way the row may have changed: a failed removal still cleared
         // the columns, and the scan is what decides whether the row is still here
         rebuild()
+    }
+
+    private func retry(_ episode: Episode) {
+        Task {
+            do {
+                try await downloads.download(episode)
+                transferErrorMessage = nil
+            } catch {
+                transferErrorMessage = downloadErrorMessage(for: error)
+            }
+        }
+    }
+}
+
+/// One in-flight or failed transfer, including its always-visible escape hatch.
+private struct ActiveDownloadRow<Action: View>: View {
+    let transfer: ActiveDownload
+    let action: Action
+
+    init(transfer: ActiveDownload, @ViewBuilder action: () -> Action) {
+        self.transfer = transfer
+        self.action = action()
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(transfer.episode.title)
+                    .font(.headline)
+                    .lineLimit(3)
+                Text(transfer.episode.podcast?.title ?? "Unknown Podcast")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                transferStatus
+            }
+            Spacer(minLength: 0)
+            action
+                .labelStyle(.iconOnly)
+        }
+    }
+
+    @ViewBuilder
+    private var transferStatus: some View {
+        switch transfer.state {
+        case .downloading(.waiting):
+            Text("Waiting…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .downloading(.indeterminate):
+            ProgressView()
+                .accessibilityLabel("Downloading")
+        case .downloading(.fraction(_, let value)):
+            ProgressView(value: value)
+                .accessibilityLabel("Downloading")
+                .accessibilityValue(value.formatted(.percent.precision(.fractionLength(0))))
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
     }
 }
 

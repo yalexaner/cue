@@ -120,6 +120,12 @@ final class DownloadManager {
 
     let context: ModelContext
     let store: EpisodeStore
+    /// Test-only stand-in for the store fetch in `episode(forGUID:)`: a
+    /// `ModelContext` cannot be made to throw on demand, and the relaunch
+    /// route's failed-lookup branch has to be exercised. `nil` in production,
+    /// and injected like every other seam rather than left settable, so no
+    /// holder of the shared manager can redirect episode resolution mid-transfer.
+    let episodeLookup: ((String) throws -> Episode?)?
     private let transport: FileTransport
     private let deliveryBarrier: DeliveryBarrier
     private let cancellationRequest: CancellationRequest
@@ -132,10 +138,12 @@ final class DownloadManager {
     init(
         context: ModelContext, store: EpisodeStore = EpisodeStore(),
         transport: @escaping FileTransport, deliveryBarrier: @escaping DeliveryBarrier = {},
-        cancellationRequest: @escaping CancellationRequest = { _, _ in }
+        cancellationRequest: @escaping CancellationRequest = { _, _ in },
+        episodeLookup: ((String) throws -> Episode?)? = nil
     ) {
         self.context = context
         self.store = store
+        self.episodeLookup = episodeLookup
         self.transport = transport
         self.deliveryBarrier = deliveryBarrier
         self.cancellationRequest = cancellationRequest

@@ -21,6 +21,16 @@ struct DownloadAttempt: Equatable {
     let origin: Origin
     var taskIdentifier: Int?
     var isCancellationRequested = false
+    /// Set while the relaunch route is finishing this attempt.
+    ///
+    /// An adopted attempt yields its token to that route, so the transfer it
+    /// stands for can be recorded — and the token is what authorises a write
+    /// (`checkCancellation(of:heldBy:)`). Without this flag a second outcome for
+    /// the same guid, arriving while the first suspends on the asset read, is
+    /// handed the *same* token and both finishes move a file and write
+    /// `localFilename`: the one-writer-per-guid hazard `DownloadOwnership.swift`
+    /// describes. The yield is single-use.
+    var isFinishing = false
     var progress = DownloadProgress.waiting
 }
 

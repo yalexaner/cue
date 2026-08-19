@@ -29,7 +29,19 @@ extension DownloadManager {
         tempURL: URL, response: URLResponse?, forGUID guid: String,
         heldBy token: UUID
     ) async throws {
-        guard let episode = try episode(forGUID: guid) else {
+        let found: Episode?
+        do {
+            found = try episode(forGUID: guid)
+        } catch {
+            // the claimed temporary file is ours from the moment the transport
+            // answers, and a lookup that throws leaves nothing below to deal
+            // with it — the transport route's `catch` only records the failure.
+            // A whole episode referenced by nothing would sit in `tmp` until the
+            // system purged it
+            try? FileManager.default.removeItem(at: tempURL)
+            throw error
+        }
+        guard let episode = found else {
             Self.logger.notice("finished download for an unknown guid; discarding the file")
             try? FileManager.default.removeItem(at: tempURL)
             return
@@ -102,7 +114,8 @@ extension DownloadManager {
     ///
     /// Propagates rather than answering `nil` on a store-level failure: "cannot
     /// tell" read as "no such episode" would discard a finished download.
-    private func episode(forGUID guid: String) throws -> Episode? {
+    func episode(forGUID guid: String) throws -> Episode? {
+        if let episodeLookup { return try episodeLookup(guid) }
         var descriptor = FetchDescriptor<Episode>(predicate: #Predicate { $0.guid == guid })
         descriptor.fetchLimit = 1
         return try context.fetch(descriptor).first

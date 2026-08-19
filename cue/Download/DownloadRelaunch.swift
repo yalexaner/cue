@@ -1,7 +1,18 @@
 import Foundation
 import OSLog
 
+private enum OrphanOwnership {
+    case available(adoptedToken: UUID?)
+    /// Another writer here already holds the guid: a live in-process transfer,
+    /// or an adopted attempt whose finish is already running.
+    case claimedHere
+}
+
 extension DownloadManager {
+    /// Fixed because a storage error can contain paths or other private detail.
+    static let episodeLookupFailureMessage =
+        "The episode library could not be read. The transfer can be retried."
+
     /// Installs the route a completion with no continuation takes.
     ///
     /// Synchronous, and called from `CueApp.init()` rather than only from a
@@ -55,19 +66,20 @@ extension DownloadManager {
         // tradeoff is deliberate — if that transfer later fails a finished
         // download is thrown away and the user retries, which beats a deleted
         // download reappearing
-        let token: UUID
-        if let attempt = attempts[guid], attempt.origin == .adopted {
-            token = attempt.token
-        } else if let attempt = attempts[guid], attempt.origin == .started {
-            if case .success(let (tempURL, _)) = result {
-                Self.logger.notice("completion for a guid already in flight here; discarding the file")
-                try? FileManager.default.removeItem(at: tempURL)
-            }
+        let adoptedToken: UUID?
+        switch orphanOwnership(forGUID: guid, result: result) {
+        case .available(let token):
+            adoptedToken = token
+        case .claimedHere:
             return
-        } else {
-            guard let claimed = claimOwnership(of: guid, origin: .adopted) else { return }
-            token = claimed
         }
+        guard resolveEpisodeForOrphan(result, guid: guid, adoptedToken: adoptedToken) else { return }
+        guard let token = adoptedToken ?? claimOwnership(of: guid, origin: .adopted) else { return }
+        // synchronously, before the first `await` below: from here on this
+        // attempt's token is spoken for, so a second outcome for the same guid
+        // is turned away by `orphanOwnership` instead of being handed the same
+        // token and finishing alongside us
+        markFinishing(guid: guid, heldBy: token)
         states[guid] = .downloading(attempts[guid]?.progress ?? .waiting)
         do {
             try checkCancellation(of: guid, heldBy: token)
@@ -110,5 +122,60 @@ extension DownloadManager {
             else { continue }
             states[identity.guid] = .downloading(.waiting)
         }
+    }
+
+    private func orphanOwnership(
+        forGUID guid: String, result: Result<(URL, URLResponse), Error>
+    ) -> OrphanOwnership {
+        guard let attempt = attempts[guid] else { return .available(adoptedToken: nil) }
+        // an adopted attempt lends its token so the transfer it stands for can
+        // be recorded — but only once: a finish already running holds it
+        guard attempt.origin != .started, !attempt.isFinishing else {
+            Self.logger.notice("completion for a guid already in flight here; discarding the file")
+            discardDeliveredFile(in: result)
+            return .claimedHere
+        }
+        return .available(adoptedToken: attempt.token)
+    }
+
+    /// Marks this attempt's token as spent on a finish that is under way.
+    private func markFinishing(guid: String, heldBy token: UUID) {
+        guard var attempt = attempts[guid], attempt.token == token else { return }
+        attempt.isFinishing = true
+        attempts[guid] = attempt
+    }
+
+    /// Confirms that an orphan outcome still belongs to a stored episode before
+    /// any state is recorded for it.
+    private func resolveEpisodeForOrphan(
+        _ result: Result<(URL, URLResponse), Error>, guid: String,
+        adoptedToken: UUID?
+    ) -> Bool {
+        do {
+            guard try episode(forGUID: guid) != nil else {
+                discardDeliveredFile(in: result)
+                retireAdoptedAttempt(forGUID: guid, token: adoptedToken)
+                states[guid] = nil
+                return false
+            }
+            return true
+        } catch {
+            discardDeliveredFile(in: result)
+            retireAdoptedAttempt(forGUID: guid, token: adoptedToken)
+            states[guid] = .failed(message: Self.episodeLookupFailureMessage)
+            Self.logger.error(
+                "could not resolve the episode for a background download: \(error, privacy: .private)")
+            return false
+        }
+    }
+
+    private func retireAdoptedAttempt(forGUID guid: String, token: UUID?) {
+        guard let token else { return }
+        _ = releaseOwnership(of: guid, heldBy: token)
+    }
+
+    private func discardDeliveredFile(in result: Result<(URL, URLResponse), Error>) {
+        guard case .success(let (tempURL, _)) = result else { return }
+        try? FileManager.default.removeItem(at: tempURL)
     }
 }
