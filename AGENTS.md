@@ -139,8 +139,9 @@ Two more that follow from the same design and are easy to break by accident:
 - Refresh is additive: match on `guid`, insert new episodes, update mutable
   metadata. Never delete local episodes, and never touch `isPlayed`,
   `localFilename`, or sessions on refresh. (spec §6)
-- The Downloads view filters on file presence only, never on played state.
-  (spec §7)
+- The completed list in Downloads filters on file presence only, never on played
+  state. The Active Transfers section is separate and derives directly from the
+  in-memory transfer states. (spec §7)
 
 ## Networking
 
@@ -181,6 +182,38 @@ Two more that follow from the same design and are easy to break by accident:
   initialisation is not atomic and which the app delegate and the transport can
   reach at the same moment). Neither is a precedent for anything else — every
   other service stays a cheap struct.
+- **Download progress is three-state, in-memory and attempt-guarded.**
+  `DownloadProgress` distinguishes `.waiting`, `.indeterminate(bytesWritten:)`
+  and `.fraction(bytesWritten:value:)`; never collapse those into `Double?`.
+  Progress and failure state stay out of SwiftData. A progress callback applies
+  only to the registered live attempt for its guid while that attempt remains
+  `.downloading`; delayed callbacks from retired or older attempts are dropped,
+  and lower byte counts never replace newer progress. The attempt records every
+  accepted report, but the observed `states` map is written only when the row
+  would render differently (`DownloadProgress.rendersDifferently(from:)`, whole
+  percent for `.fraction`): observation invalidates on assignment rather than on
+  inequality, and both download screens read that map, so publishing every byte
+  callback costs a library-wide body pass tens of times a second. Throttling
+  there is deliberate — do not "restore" a write per callback.
+- **Download cancellation is guid-addressable but attempt-scoped.** An adopted
+  background transfer has no in-process `Task`, so cancellation enumerates
+  session tasks by the guid in `taskDescription`, while queued transfers are
+  removed from the guid-keyed waiter list. The request names the cancelled
+  attempt's task identifier alongside the guid and both must match; there is no
+  guid-wide form. Enumerating the session suspends, and by the time it answers
+  that attempt may have retired and a retry — whose task carries the same guid —
+  may hold it, so guid matching alone would cancel the transfer the user just
+  started. A task is created off the main actor and registered back onto it, so
+  an attempt can be cancelled before it has an identifier to name: that request
+  is not widened to the guid but re-issued from `registerStartedAttempt`, which
+  runs before the task is resumed. Cancellation intent belongs to the attempt
+  record and is checked through finalisation; it is cleared when that exact
+  attempt retires so a retry is not poisoned.
+- **A failed download state carries its safe display message.** Every failure
+  write goes through `downloadErrorMessage(for:)`; cancellation produces no
+  failed state, and the fallback for an unknown error is always a fixed message,
+  never its raw description. Raw descriptions and full enclosure URLs may
+  contain credentials and must not reach the UI or a `.public` log entry.
 - **A relaunch delivery is never dropped, and never answered early.** iOS may
   relaunch the app *only* to hand over a finished background transfer, so:
   `AppDelegate` — the app's one UIKit entry point, via
@@ -205,8 +238,10 @@ Two more that follow from the same design and are easy to break by accident:
   delivered — the suspended-not-terminated order — is answered at registration,
   and answering a replaced handler inline would report "safe to suspend" while a
   finish is still running. Background transfers are carried by the
-  system daemon and need no `UIBackgroundModes` entry: `Info.plist` stays `audio`
-  only.
+  system daemon and need no `UIBackgroundModes` entry: `UIBackgroundModes` stays
+  `audio` only. The partial plist carries exactly two keys — that one and the
+  `NSAppTransportSecurity` exception (spec §6) — because neither has an
+  `INFOPLIST_KEY_*` equivalent.
 - **The app builds its own `ModelContainer`.** `CueApp.init()` constructs it and
   passes it to `.modelContainer(container)` rather than `.modelContainer(for:)`,
   because `DownloadManager` needs `mainContext` before the scene body runs; a
@@ -228,7 +263,9 @@ Two more that follow from the same design and are easy to break by accident:
   propagate unchanged — wrapping them hides the cause. `feedErrorMessage(for:)`
   is the single place those map to user-facing text. Download failures map
   through `downloadErrorMessage(for:)` (`cue/Views/DownloadErrorMessage.swift`)
-  instead — it covers `DownloadManager.Failure` and `EpisodeStore.Failure`, and
+  instead — it covers `DownloadManager.Failure`, `EpisodeStore.Failure`,
+  `URLError` (reachability) and `CocoaError` (storage), answers every other
+  error with a fixed sentence rather than its description, and
   returns `String?` so cancellation cannot be reported by forgetting a `catch`,
   the same shape as `reportableFeedErrorMessage(for:)`. The feed mapper stays
   feed-only.
@@ -297,11 +334,16 @@ Two more that follow from the same design and are easy to break by accident:
   rewritten to) — is extracted into a plain free function
   (`cue/Views/EpisodeListFormatting.swift`, `cue/Views/FeedErrorMessage.swift`,
   `cue/Views/FeedRefreshing.swift`, `cue/Views/FeedAddress.swift`,
-  `cue/Views/DownloadListFormatting.swift`, `cue/Views/DownloadErrorMessage.swift`)
+  `cue/Views/DownloadListFormatting.swift`, `cue/Views/DownloadErrorMessage.swift`,
+  `cue/Views/ActiveDownloadFormatting.swift`)
   and tested directly — including the policy the two download screens must not
   answer differently: a transfer in flight outranks a stored file, and a row
-  mid-transfer offers neither action. Model mutations a view triggers live on the
-  model (`Episode.setPlayed(_:)`), so invariants stay pinned by model tests.
+  mid-transfer offers Cancel rather than Delete. The Active Transfers section
+  asks that same function with no filename, deliberately: it is the transfer's
+  own view of itself, so a failed retry is listed there with Retry while the
+  completed list below still offers Delete for the file that is really on disk. Model mutations a view triggers
+  live on the model (`Episode.setPlayed(_:)`), so invariants stay pinned by model
+  tests.
 - Fixtures live in `cueTests/Fixtures/` and load through the shared
   `fixtureData(named:withExtension:)` helper in `cueTests/FixtureLoading.swift`,
   which resolves the test bundle via `Bundle(for:)` with a private marker class.
@@ -345,7 +387,7 @@ Two more that follow from the same design and are easy to break by accident:
   hand it a closure over `@Model` values without the compiler treating them as
   sent across an isolation boundary. Do not drop that parameter.
 - The relaunch route is tested through its own seams —
-  `DownloadManager.handleCompletion(_:forGUID:)`, `adopt(inFlightGUIDs:)` and
+  `DownloadManager.handleCompletion(_:forGUID:)`, `adopt(inFlightAttempts:)` and
   `BackgroundDownloader.route(_:forGUID:)` — never through `connect(to:)`, so no
   test constructs a background session. Constructing a `BackgroundDownloader`
   does not create one; touching its `session` does, and no test may.

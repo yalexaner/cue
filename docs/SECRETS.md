@@ -32,6 +32,23 @@ minutes.
    userinfo, path, query and fragment — a signature can ride in any of them.
    The HTTP status is what spec §6 requires for diagnosis, and it survives
    redaction; the URL itself is not required and must not be shown.
+   `downloadErrorMessage(for:)` also has no pass-through fallback: an
+   unrecognised error yields a fixed sentence, never its `localizedDescription`,
+   which can embed the failing URL. Feed-*add* errors deliberately still name
+   the feed URL — spec §6 requires it for diagnosis — and that asymmetry is
+   intentional.
+7. **A plain-`http` feed sends its token in the clear.** ATS is disabled
+   app-wide (`NSAppTransportSecurity` / `NSAllowsArbitraryLoads` in
+   `cue/Support/Info.plist`), because feed addresses are pasted by the user and
+   per-domain exceptions cannot be enumerated for them. A pre-signed `http://`
+   feed and its enclosures therefore transit unencrypted: prefer `https` for any
+   token-bearing feed, and treat an `http`-only private feed's token as exposed
+   on any untrusted network. Note that `NSAllowsArbitraryLoads` with no
+   `NSExceptionDomains` beside it turns ATS off for *every* connection, not only
+   plain-`http` ones: an `https` feed or enclosure also loses the platform's TLS
+   floor (minimum TLS 1.2, forward secrecy, certificate transparency), so a
+   token-bearing request can be accepted over a weak TLS configuration without
+   the app noticing.
 
 ## Running gitleaks locally
 
