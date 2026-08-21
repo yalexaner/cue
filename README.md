@@ -8,7 +8,7 @@ mid-episode never destroys where you actually were.
 
 - Private feeds fetched directly from origin — no proxy, no account.
 - Download-then-play only; offline is the primary case.
-- iOS 26, SwiftUI, SwiftData, AVFoundation. No third-party dependencies.
+- iOS 26, SwiftUI, SwiftData, AVFoundation, MediaPlayer. No third-party dependencies.
 
 **Status: in development** — the bullets above describe the finished v1, not
 what runs today. Working now: subscribe to a feed by URL, browse a show's
@@ -18,8 +18,10 @@ cancel and retry above completed episodes grouped by show, with a per-phase
 transfer line (queued, connecting, downloading, stalled, finalizing) and an
 exportable on-device diagnostics log for reporting a failure. Refresh says which
 feed it is checking, downloaded rows show their own file size, and the add-feed
-sheet offers to paste an address from the clipboard. Not built yet:
-playback, session tracking, sleep timer, OPML import. See `ROADMAP.md`.
+sheet offers to paste an address from the clipboard. Downloaded episodes play
+offline with in-app seeking and rate controls plus lock-screen Now Playing and
+play/pause integration. Not built yet: session tracking, sleep timer, OPML
+import. See `ROADMAP.md`.
 
 ## Build
 

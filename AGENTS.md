@@ -115,7 +115,61 @@ These are not preferences. Each one is a bug being designed out.
   uniqueness is store-wide, not per podcast
   (`guidUniquenessIsGlobalNotPerPodcast`).
 - **The playback path performs no network request and no reachability check.**
-  `AVPlayerItem` is built from the local file URL. (spec §8)
+  `AVPlayerItem` is built from the local file URL. Now Playing has no artwork in
+  this step because the app has no downloaded artwork pipeline; adding a fetch
+  there would violate offline playback. (spec §8)
+- **Play gates on the disk before it considers reusing an item.** Every
+  `PlaybackEngine.play(_:store:)` call requires a `localFilename` and calls the
+  throwing `Episode.isDownloaded(in:)`; a confirmed absence is `.fileMissing`,
+  while an indeterminate storage error propagates. Only after that check may the
+  engine reuse the loaded `(guid, localFilename)` pair. The same live pair keeps
+  its position, an ended pair restarts from zero, and a changed filename reloads
+  even when the guid is unchanged.
+- **Unload playback before removing or replacing an episode file.** No view
+  does this itself. `DownloadManager` owns an injected guid-based preparation
+  callback wired to the engine (`CueApp` supplies
+  `{ guid in playback.unload(ifGUID: guid) }`), and every file mutation goes
+  through it: an accepted foreground download invokes it immediately before
+  publishing transfer state, the shared finish path invokes it again before
+  moving a completed file, and `deleteDownload(for:)` invokes it after the
+  cleared columns are committed and immediately before `store.removeFile`. The
+  finish-path call covers orphaned background completions, where a relaunched
+  app can load the old file after the original process is gone; the delete-path
+  call is what keeps the invariant off two untested screens and out of reach of
+  a failed save, which leaves the file on disk and must leave audio playing.
+  Active Transfers retries follow the same manager-owned path. A new
+  file-mutating operation calls `prepareForFileMutation(guid)`, never
+  `PlaybackEngine.unload(ifGUID:)` directly.
+- **Every asynchronous playback callback is generation-guarded, and a failed
+  item is an error rather than silence.** `PlaybackEngine` bumps
+  `loadGeneration` on each load and unload and `seekGeneration` on each seek;
+  the item-status, end-of-item, periodic-time and seek-completion seams capture
+  the generation current when they were installed and return without touching
+  state when it is stale, so an older item's failure cannot resurface after a
+  reload cleared it and a superseded seek cannot undo the newer target. New
+  callbacks follow that shape. `AVPlayer.status` is observed alongside
+  `AVPlayerItem.status` because the player is an error surface of its own: a
+  player-level failure stops audio without touching the item, so unobserved it
+  would leave `isPlaying` true and Now Playing publishing a rate over silence.
+  A seek that reports `finished == false` gives back the `itemEnded` clear it
+  applied optimistically and stops the player with it — the playhead may still
+  be at the end, so a restart that never landed must restart again rather than
+  leave Pause showing and a rate published over silence.
+  `play(_:store:)` reloads a failed pair, but the
+  resume paths (`resumeLoaded()`, `togglePlayPause()`) cannot reload, so
+  `startLoadedPlayback()` throws on a failed item — returning quietly left the
+  player sheet's and the lock screen's Play button dead with no feedback.
+- **The engine owns the audio session and does not deactivate it in this step.**
+  Activation happens in the one internal start transition (category
+  `.playback`, mode `.spokenAudio`); deactivation belongs to the sleep-timer
+  step. Two lifetime observers reconcile state with the system: an interruption
+  pauses on `.began` and deliberately does not resume on `.ended` (a call must
+  never silently restart audio in a pocket), and a route change pauses on
+  `.oldDeviceUnavailable`, which the system acts on without posting an
+  interruption at all — without it, unplugging headphones leaves the button
+  showing Pause for silence. `AVPlayerItem.audioTimePitchAlgorithm =
+  .timeDomain` is what makes the rate ladder change speed without pitch shift
+  (spec §8) — a requirement, not a default worth tidying away.
 - **Lock-screen scrubber and skip commands stay disabled.**
   `changePlaybackPositionCommand`, `skipForwardCommand` and
   `skipBackwardCommand` are `isEnabled = false` on purpose, so position cannot
@@ -134,8 +188,21 @@ These are not preferences. Each one is a bug being designed out.
   feed writing `Int.max` seconds yields a useless number instead of crashing the
   parse — which means an absurd `Episode.duration` is a value every consumer has
   to expect. Never hand it to `Int(_:)` unguarded: that traps, on every render of
-  a row the feed itself authored, on every launch. `episodeDurationText(_:)`
-  bounds it at 100 hours and shows anything past that as no duration at all.
+  a row the feed itself authored, on every launch. The bound is one shared
+  constant, `maximumReasonableEpisodeDuration` in
+  `cue/Playback/PlaybackPolicy.swift`, and every consumer guards independently
+  of the parser: `episodeDurationText(_:)` shows anything past it as no
+  duration at all, `playerTimeText(_:)` as `0:00`, `playerDuration(itemDuration:episodeDuration:)`
+  rejects a feed value past it, and `isPlaybackDurationUsable(_:)` is the one
+  predicate the player's three duration consumers share —
+  `playerSliderUpperBound(duration:)` answers a placeholder bound on it,
+  `playerRemainingTimeText(elapsed:duration:)` answers `--:--` on it, and
+  `PlayerView` disables the slider on it. They must not disagree: `playerDuration`
+  deliberately passes an item-reported duration through unbounded, so a slider
+  disabled on `duration == nil` alone renders live over `0...1` while elapsed
+  runs past it, and a bound derived from the elapsed time would instead pin the
+  thumb at the far end and leave a control that can only seek backwards. Never
+  re-declare a local copy.
 - **A new subscription that would be empty is refused.** `guid` uniqueness is
   store-wide, so the same show re-added under a rotated token URL matches no
   existing `Podcast` yet has every episode skipped as owned elsewhere. `add`
@@ -185,7 +252,7 @@ Two more that follow from the same design and are easy to break by accident:
   task needs travels out of band: `DownloadTaskIdentity.currentGUID` (a task-local
   set around the transport call) stamps `URLSessionTask.taskDescription`, which is
   how a relaunched app maps a finished task back to an `Episode`.
-- **`DownloadManager` is the one long-lived service, on purpose.** It is a
+- **`DownloadManager` is one of two long-lived services, on purpose.** It is a
   `@MainActor @Observable final class` created once in `CueApp` and injected with
   `.environment`, not a struct built at the call site: a background session's
   delegate and the in-memory per-guid transfer state have to outlive any view,
@@ -196,8 +263,14 @@ Two more that follow from the same design and are easy to break by accident:
   identifier is process-global, so a second instance is a runtime error (the
   session itself is created behind a lock rather than by a `lazy var`, whose
   initialisation is not atomic and which the app delegate and the transport can
-  reach at the same moment). Neither is a precedent for anything else — every
-  other service stays a cheap struct.
+  reach at the same moment).
+- **`PlaybackEngine` is the other long-lived service, on purpose.** It is a
+  `@MainActor @Observable final class` created once in `CueApp`, held in
+  `@State`, and injected with `.environment`: audio, the loaded item and Now
+  Playing integration must outlive the player sheet. Its playback state is
+  deliberately in-memory only; do not add a stored position or another schema
+  field. These two long-lived services are not a precedent for anything else —
+  every other service stays a cheap struct.
 - **Download progress is a six-phase vocabulary, in-memory and attempt-guarded.**
   `DownloadProgress` distinguishes `.queued(position:)`, `.connecting`,
   `.indeterminate(bytesWritten:bytesPerSecond:)`,
@@ -334,7 +407,11 @@ Two more that follow from the same design and are easy to break by accident:
   a *download* failed under an alert titled *Could Not Export Diagnostics*. It
   is non-optional, unlike the other two — the export is one tap that either
   produces a file or does not, so a `nil` would only let the button fail
-  silently.
+  silently. Playback failures map through `playbackErrorMessage(for:)`
+  (`cue/Views/PlaybackErrorMessage.swift`) — `PlaybackEngine.Failure`,
+  `EpisodeStore.Failure`, `CocoaError`, and a fixed sentence for anything else,
+  for the same credential reason. Each mapper stays domain-only; do not merge
+  them.
 - **A feed or enclosure URL never reaches the log at `.public` privacy.** Private
   feeds are pre-signed (spec §6), so those URLs are tokens, and `os_log` renders
   an error's associated values — `DownloadManager.Failure.httpStatus(_, url)`
@@ -549,6 +626,12 @@ agent. Everything here follows from that and from `docs/SECRETS.md`.
 
 - Swift Testing (`@Test`, `#expect`), not XCTest. No `XCTestCase` subclasses,
   no `XCTAssert`.
+- Concrete `AVPlayer`, audio-session and MediaPlayer wiring is build-only
+  covered. Do not make tests touch the `MPNowPlayingInfoCenter` or
+  `MPRemoteCommandCenter` singletons. Extract and test the policy inputs instead:
+  playback rates and clamps, Now Playing dictionaries, row actions, formatting
+  and error mapping; engine tests cover state transitions and failures before
+  AVPlayer work where practical.
 - Views are covered by the build only. Anything worth asserting — sorting,
   formatting, error-message mapping, and the policy behind a view action (which
   failures stop a loop, which one gets reported, what a pasted address may be
@@ -558,7 +641,9 @@ agent. Everything here follows from that and from `docs/SECRETS.md`.
   `cue/Views/DownloadListFormatting.swift`, `cue/Views/DownloadErrorMessage.swift`,
   `cue/Views/ActiveDownloadFormatting.swift`,
   `cue/Views/DownloadIndicatorActivation.swift`, `cue/Views/FeedPasteOffer.swift`,
-  `cue/Views/DiagnosticsExportErrorMessage.swift`, and
+  `cue/Views/DiagnosticsExportErrorMessage.swift`,
+  `cue/Views/PlayerFormatting.swift`, `cue/Views/PlayerRowPolicy.swift`,
+  `cue/Views/PlaybackErrorMessage.swift`, and
   `cue/Views/FeedRefreshStatus.swift` — the one exception, a small `@Observable`
   model rather than a bare function, because the five-second "still waiting"
   transition is time-driven and nothing arrives to trigger it)
