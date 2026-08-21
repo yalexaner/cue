@@ -21,6 +21,7 @@ struct PodcastDetailView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.diagnostics) private var diagnostics
     @Environment(DownloadManager.self) private var downloads
+    @Environment(PlaybackEngine.self) private var playback
 
     let podcast: Podcast
 
@@ -30,6 +31,8 @@ struct PodcastDetailView: View {
     @State private var downloadErrorText: String?
     @State private var pendingDeletion: PendingDownloadDeletion?
     @State private var pendingFailure: PendingDownloadFailure?
+    @State private var playbackErrorText: String?
+    @State private var isPresentingPlayer = false
 
     /// Constructed here, not defaulted inside the model: a size is measured on
     /// demand for the confirmation and this list never scans the directory.
@@ -45,17 +48,22 @@ struct PodcastDetailView: View {
                 activateIndicator(activation, for: episode)
             }
             .swipeActions(edge: .leading) {
+                // played stays first: the first action of an edge is the
+                // one a full swipe performs, and a full leading swipe has
+                // meant "toggle played" since before playback existed
                 Button {
                     setPlayed(!episode.isPlayed, on: episode)
                 } label: {
                     playedLabel(for: episode)
                 }
                 .tint(episode.isPlayed ? .gray : .accentColor)
+                playButton(for: episode)
             }
             .swipeActions(edge: .trailing) {
                 downloadButton(for: episode)
             }
             .contextMenu {
+                playButton(for: episode)
                 Button {
                     setPlayed(!episode.isPlayed, on: episode)
                 } label: {
@@ -80,6 +88,8 @@ struct PodcastDetailView: View {
         .refreshErrorAlert($refreshErrorMessage)
         .errorAlert("Could Not Save", $saveErrorMessage)
         .errorAlert("Download Failed", $downloadErrorText)
+        .errorAlert("Playback Failed", $playbackErrorText)
+        .sheet(isPresented: $isPresentingPlayer) { PlayerView() }
         .deleteDownloadConfirmation($pendingDeletion) { guid in
             episode(withGUID: guid).map { deleteDownload($0) }
         }
@@ -129,6 +139,18 @@ struct PodcastDetailView: View {
 
     private func downloadState(for episode: Episode) -> EpisodeDownloadState {
         episodeDownloadState(localFilename: episode.localFilename, transfer: downloads.state(for: episode))
+    }
+
+    @ViewBuilder
+    private func playButton(for episode: Episode) -> some View {
+        if playAction(for: downloadState(for: episode)) {
+            Button {
+                play(episode)
+            } label: {
+                Label("Play", systemImage: "play.fill")
+            }
+            .tint(.accentColor)
+        }
     }
 
     /// The row's one file action, including Cancel while a transfer is running.
@@ -185,6 +207,16 @@ struct PodcastDetailView: View {
             try downloads.deleteDownload(for: episode)
         } catch {
             downloadErrorText = downloadErrorMessage(for: error)
+        }
+    }
+
+    private func play(_ episode: Episode) {
+        do {
+            try playback.play(episode, store: store)
+            playbackErrorText = nil
+            isPresentingPlayer = true
+        } catch {
+            playbackErrorText = playbackErrorMessage(for: error)
         }
     }
 

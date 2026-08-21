@@ -13,6 +13,7 @@ import SwiftUI
 /// Downloads screen for a library that is entirely intact.
 struct DownloadsView: View {
     @Environment(DownloadManager.self) private var downloads
+    @Environment(PlaybackEngine.self) private var playback
     @Query private var episodes: [Episode]
 
     @State private var groups: [DownloadGroup] = []
@@ -23,6 +24,8 @@ struct DownloadsView: View {
     @State private var transferErrorMessage: String?
     @State private var pendingDeletion: PendingDownloadDeletion?
     @State private var pendingFailure: PendingDownloadFailure?
+    @State private var playbackErrorText: String?
+    @State private var isPresentingPlayer = false
 
     private let store = EpisodeStore()
 
@@ -93,8 +96,12 @@ struct DownloadsView: View {
                                 state: fileRowState(for: item.episode),
                                 byteCount: item.byteCount)
                         }
+                        .swipeActions(edge: .leading) { playButton(for: item.episode) }
                         .swipeActions(edge: .trailing) { fileButton(for: item.episode) }
-                        .contextMenu { fileButton(for: item.episode) }
+                        .contextMenu {
+                            playButton(for: item.episode)
+                            fileButton(for: item.episode)
+                        }
                     }
                 } header: {
                     Text(group.title)
@@ -129,6 +136,8 @@ struct DownloadsView: View {
         .errorAlert("Could Not Read Downloads", $storageErrorMessage)
         .errorAlert("Could Not Delete", $deleteErrorMessage)
         .errorAlert("Download Failed", $transferErrorMessage)
+        .errorAlert("Playback Failed", $playbackErrorText)
+        .sheet(isPresented: $isPresentingPlayer) { PlayerView() }
         .deleteDownloadConfirmation($pendingDeletion) { guid in
             episode(withGUID: guid).map { delete($0) }
         }
@@ -277,6 +286,20 @@ struct DownloadsView: View {
         }
     }
 
+    @ViewBuilder
+    private func playButton(for episode: Episode) -> some View {
+        let state = episodeDownloadState(
+            localFilename: episode.localFilename, transfer: downloads.state(for: episode))
+        if playAction(for: state) {
+            Button {
+                play(episode)
+            } label: {
+                Label("Play", systemImage: "play.fill")
+            }
+            .tint(.accentColor)
+        }
+    }
+
     /// Re-reads which episodes have a file and what those files occupy.
     ///
     /// The previous list is left standing when the scan fails, for the same
@@ -323,6 +346,16 @@ struct DownloadsView: View {
             } catch {
                 transferErrorMessage = downloadErrorMessage(for: error)
             }
+        }
+    }
+
+    private func play(_ episode: Episode) {
+        do {
+            try playback.play(episode, store: store)
+            playbackErrorText = nil
+            isPresentingPlayer = true
+        } catch {
+            playbackErrorText = playbackErrorMessage(for: error)
         }
     }
 }
