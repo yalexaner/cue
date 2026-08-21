@@ -25,6 +25,7 @@ struct CueApp: App {
     /// background session's delegate has to have somewhere to deliver to. See
     /// the type's own doc comment for the full reasoning.
     @State private var downloads: DownloadManager
+    @State private var playback: PlaybackEngine
 
     init() {
         diagnostics = DiagnosticsFileWriter(baseDirectory: DiagnosticsFileWriter.defaultDirectory())
@@ -51,6 +52,7 @@ struct CueApp: App {
         } catch {
             fatalError("could not open the store: \(error)")
         }
+        let playback = PlaybackEngine(nowPlayingController: NowPlayingController())
         let manager = DownloadManager(
             context: container.mainContext,
             transport: BackgroundDownloader.shared.transport,
@@ -65,12 +67,14 @@ struct CueApp: App {
         // a completion with nowhere to go loses the download
         manager.registerCompletionRoute(with: .shared)
         _downloads = State(initialValue: manager)
+        _playback = State(initialValue: playback)
     }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(downloads)
+                .environment(playback)
                 // the only seam that reaches the three views which construct a
                 // `FeedService` themselves
                 .environment(\.diagnostics, diagnostics)
