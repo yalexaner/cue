@@ -666,8 +666,12 @@ downloads, cancels, confirms a delete or shows a failure — never a silent retr
 **Goal.** Audio plays from local files, offline, with correct lock-screen
 behaviour.
 
-**Files.** `Playback/PlaybackEngine.swift`, `Playback/NowPlayingController.swift`,
-`Views/PlayerView.swift`
+**Files.** `App/CueApp.swift`, `Playback/PlaybackEngine.swift`,
+`Playback/PlaybackSeeking.swift`, `Playback/NowPlayingController.swift`,
+`Playback/PlaybackPolicy.swift`, `Views/PlayerView.swift`, `Views/PlayerFormatting.swift`,
+`Views/PlayerRowPolicy.swift`, `Views/PlaybackErrorMessage.swift`,
+`Views/EpisodeListFormatting.swift`, `Views/DownloadsView.swift`,
+`Views/PodcastDetailView.swift`
 
 **Tasks.**
 
@@ -679,6 +683,10 @@ behaviour.
    **disabled**. This is a requirement, not an omission; do not "fix" it.
 5. Rate control 1.0×–2.0× with `audioTimePitchAlgorithm = .timeDomain`.
 6. In-app progress slider is enabled. Only the lock-screen scrubber is disabled.
+7. Downloaded rows in podcast detail and Downloads offer Play and present the
+   player without stopping audio when the sheet closes.
+8. In-app controls include ±30-second skips; the equivalent lock-screen commands
+   remain disabled.
 
 **Acceptance.** Download, enable airplane mode, force-quit, relaunch, play — no
 spinner, no error (spec AC 4). Lock the screen: scrubber and skip absent or
