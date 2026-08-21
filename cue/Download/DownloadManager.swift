@@ -58,6 +58,12 @@ final class DownloadManager {
     /// when one appears, not by a wildcard the snapshot resolves too late.
     typealias CancellationRequest = @Sendable (String, Int) async -> Void
 
+    /// Stops any loaded episode before this manager can replace its file.
+    ///
+    /// Stored on the long-lived manager rather than supplied by a view because
+    /// a background completion can mutate a file without any scene existing.
+    typealias FileMutationPreparation = (String) -> Void
+
     /// What a given episode's transfer is doing right now. Absent means idle.
     enum DownloadState: Equatable {
         case downloading(DownloadProgress)
@@ -133,6 +139,8 @@ final class DownloadManager {
     private let transport: FileTransport
     let deliveryBarrier: DeliveryBarrier
     private let cancellationRequest: CancellationRequest
+    /// Internal because the shared finish path lives in `DownloadFinish.swift`.
+    let prepareForFileMutation: FileMutationPreparation
 
     /// The transfer slot and its queued waiters. Internal only because the
     /// queue itself lives in `DownloadQueue.swift`.
@@ -154,6 +162,7 @@ final class DownloadManager {
         context: ModelContext, store: EpisodeStore = EpisodeStore(),
         transport: @escaping FileTransport, deliveryBarrier: @escaping DeliveryBarrier = {},
         cancellationRequest: @escaping CancellationRequest = { _, _ in },
+        prepareForFileMutation: @escaping FileMutationPreparation = { _ in },
         episodeLookup: ((String) throws -> Episode?)? = nil,
         diagnostics: DiagnosticsSink = NoOpDiagnosticsSink(),
         clock: DownloadClock = SystemDownloadClock()
@@ -165,6 +174,7 @@ final class DownloadManager {
         self.transport = transport
         self.deliveryBarrier = deliveryBarrier
         self.cancellationRequest = cancellationRequest
+        self.prepareForFileMutation = prepareForFileMutation
         self.clock = clock
     }
 
@@ -207,6 +217,11 @@ final class DownloadManager {
         // from the session while this transfer runs cannot write over it
         guard let token = claimOwnership(of: guid) else { return }
         let attempt = DiagnosticsAttemptID(token: token)
+
+        // Keep playback teardown and transfer-state publication in one
+        // main-actor operation. Otherwise a row can reload the old file between
+        // an action's unload and the task reaching this method.
+        prepareForFileMutation(guid)
 
         // before the slot, not after: a queued transfer with no state reads as
         // "not downloaded", so the row keeps offering Download and a second tap

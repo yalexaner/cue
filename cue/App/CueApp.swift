@@ -60,6 +60,7 @@ struct CueApp: App {
             // handed over until the finish that follows it reports back
             deliveryBarrier: { BackgroundDownloader.shared.completeDeliveredWork() },
             cancellationRequest: BackgroundDownloader.shared.cancellationRequest,
+            prepareForFileMutation: { guid in playback.unload(ifGUID: guid) },
             diagnostics: diagnostics
         )
         // here rather than only in the scene's `.task`: a launch made purely to
