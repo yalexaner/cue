@@ -22,15 +22,21 @@ func episodesNewestFirst(_ episodes: [Episode]) -> [Episode] {
     }
 }
 
-/// Past this, the value is a feed bug rather than an episode — a hundred hours.
+/// A whole number of seconds as `h:mm:ss`, or `m:ss` under an hour.
 ///
-/// The ceiling is a correctness guard, not cosmetics. `DurationParser` prefers a
-/// representable absurdity over trapping on the multiply, so `<itunes:duration>`
-/// can legitimately deliver `Int.max` seconds; `Int(_: Double)` traps on exactly
-/// that, which would crash every render of a row the feed itself authored, on
-/// every launch, with no way out but wiping the store. The bound also keeps
-/// `hours` inside the 32 bits `%d` consumes.
-private let maximumDisplayableDuration: TimeInterval = 100 * 3_600
+/// The shared tail of every duration and position label. Each caller applies its
+/// own bounds check and rounding first — this one only formats, and traps for
+/// nothing an `Int` can already hold.
+func hoursMinutesSecondsText(_ total: Int) -> String {
+    let hours = total / 3600
+    let minutes = (total % 3600) / 60
+    let seconds = total % 60
+
+    if hours > 0 {
+        return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+    }
+    return String(format: "%d:%02d", minutes, seconds)
+}
 
 /// A duration as `h:mm:ss`, or `m:ss` under an hour. `nil` when there is nothing
 /// worth showing.
@@ -40,17 +46,9 @@ private let maximumDisplayableDuration: TimeInterval = 100 * 3_600
 /// rather than as a confident `0:00`.
 func episodeDurationText(_ duration: TimeInterval?) -> String? {
     // NaN and infinity both fail this comparison, so no separate finiteness check
-    guard let duration, duration >= 1, duration < maximumDisplayableDuration else { return nil }
+    guard let duration, duration >= 1, duration < maximumReasonableEpisodeDuration else { return nil }
 
-    let total = Int(duration.rounded())
-    let hours = total / 3600
-    let minutes = (total % 3600) / 60
-    let seconds = total % 60
-
-    if hours > 0 {
-        return String(format: "%d:%02d:%02d", hours, minutes, seconds)
-    }
-    return String(format: "%d:%02d", minutes, seconds)
+    return hoursMinutesSecondsText(Int(duration.rounded()))
 }
 
 /// An episode row's second line: date, duration and file size, separated by
