@@ -6,8 +6,9 @@ import SwiftData
 /// Its own file for the reason `DownloadFinish.swift` and `DownloadOwnership.swift`
 /// are: `DownloadManager.swift` sits at the 400-line `file_length` warning that
 /// `--strict` turns into an error, and deletion is a cohesive topic to lift out.
-/// It needs nothing that was not already internal for those splits — `context`,
-/// `store` and `states`.
+/// It needs `context`, `store` and `states`, which were already internal for
+/// those splits, plus `prepareForFileMutation`, which is internal for the same
+/// reason.
 extension DownloadManager {
     /// Removes the downloaded file and clears the download columns (spec §7).
     ///
@@ -19,6 +20,10 @@ extension DownloadManager {
     /// a file that is gone, which is the direction the design forbids; this
     /// order can at worst leave a file no row claims, which the reconciliation
     /// sweep collects.
+    ///
+    /// Playback teardown is this method's, not the caller's: unloading in each
+    /// view duplicated the invariant across two untested screens and stopped
+    /// audio even when the save failed and the file stayed put.
     func deleteDownload(for episode: Episode) throws {
         guard let filename = episode.localFilename else {
             // nothing recorded — clearing again is not an error. A stray
@@ -55,6 +60,10 @@ extension DownloadManager {
         if previousState?.isFailed == true {
             states[episode.guid] = nil
         }
+
+        // the columns are committed cleared, so the removal is going to be
+        // attempted: stop any player holding this file before it disappears
+        prepareForFileMutation(episode.guid)
 
         do {
             try store.removeFile(forRelativeFilename: filename)

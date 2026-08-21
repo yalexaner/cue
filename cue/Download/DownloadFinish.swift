@@ -49,6 +49,7 @@ extension DownloadManager {
             try Task.checkCancellation()
             try checkCancellation(of: guid, heldBy: token)
             try store.prepareEpisodesDirectory()
+            prepareForFileMutation(guid)
             let destination = try store.moveFile(at: tempURL, toRelativeFilename: filename)
             let attempt = DiagnosticsAttemptID(token: token)
             record(.downloadFileMoved(guid: DiagnosticsGUID(guid), attempt: attempt))

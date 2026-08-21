@@ -64,6 +64,43 @@ struct DownloadManagerRelaunchTests {
         }
     }
 
+    @Test func aRelaunchCompletionUnloadsAnOldFileBeforeReplacingIt() async throws {
+        try await withTemporaryBaseAsync { base in
+            let context = try makeContext()
+            let store = EpisodeStore(baseDirectory: base)
+            let episode = try makeEpisode(in: context)
+            episode.localFilename = "old.mp3"
+            episode.downloadedAt = .now
+            try context.save()
+            try store.prepareEpisodesDirectory()
+            try installRejectedAudio(named: "old.mp3", in: store, base: base)
+
+            let playback = PlaybackEngine()
+            try playback.play(episode, store: store)
+            var preparationCount = 0
+            let manager = DownloadManager(
+                context: context,
+                store: store,
+                transport: failingFileTransport(),
+                prepareForFileMutation: { guid in
+                    #expect(guid == episode.guid)
+                    #expect(playback.episodeGUID == episode.guid)
+                    preparationCount += 1
+                    playback.unload(ifGUID: guid)
+                }
+            )
+            let staged = try stagedFile(in: base)
+
+            await manager.handleCompletion(.success((staged, try response(200))), forGUID: episode.guid)
+
+            #expect(preparationCount == 1)
+            #expect(playback.episodeGUID == nil)
+            let replacement = try #require(episode.localFilename)
+            try #expect(persistedEpisode(guid: "guid-1", in: context)?.localFilename == replacement)
+            try #expect(store.fileExists(forRelativeFilename: "old.mp3") == false)
+        }
+    }
+
     /// A transfer that failed while the app was gone has no continuation to
     /// throw to; leaving the state alone spins the row forever, and a row that
     /// reads `.downloading` offers neither a retry nor a delete.
