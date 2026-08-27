@@ -81,7 +81,7 @@ struct AddFeedView: View {
         } catch {
             // nil when Cancel got here first: the sheet is already dismissed and
             // there is nothing to report
-            errorMessage = reportableFeedErrorMessage(for: error)
+            errorMessage = reportableFeedErrorMessage(for: error, host: DiagnosticsHost(trimmedURLString))
         }
     }
 }

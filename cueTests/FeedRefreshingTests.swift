@@ -35,9 +35,11 @@ struct FeedRefreshSweepTests {
         let transport = try sweepStub(failures: failures)
         let service = FeedService(context: context, transport: transport.transport)
 
-        let error = await refreshAll(podcasts, using: service)
+        let summary = await refreshAll(podcasts, using: service)
 
-        #expect((error as? StubTransportError) == .unreachable(firstFeedURL))
+        #expect((summary.firstFailure?.error as? StubTransportError) == .unreachable(firstFeedURL))
+        #expect(summary.refreshed == 1)
+        #expect(summary.failed == 1)
         #expect(transport.requestedURLStrings == [firstFeedURL, secondFeedURL])
         #expect(podcasts[1].episodes.count == 3)
     }
@@ -52,9 +54,11 @@ struct FeedRefreshSweepTests {
         let transport = try sweepStub(failures: failures)
         let service = FeedService(context: context, transport: transport.transport)
 
-        let error = await refreshAll(podcasts, using: service)
+        let summary = await refreshAll(podcasts, using: service)
 
-        #expect((error as? StubTransportError) == .unreachable(firstFeedURL))
+        #expect((summary.firstFailure?.error as? StubTransportError) == .unreachable(firstFeedURL))
+        #expect(summary.firstFailure?.host == DiagnosticsHost(firstFeedURL))
+        #expect(summary.failed == 2)
     }
 
     /// Nothing reported, and every feed actually visited — an early return that
@@ -65,9 +69,11 @@ struct FeedRefreshSweepTests {
         let transport = try sweepStub()
         let service = FeedService(context: context, transport: transport.transport)
 
-        let error = await refreshAll(podcasts, using: service)
+        let summary = await refreshAll(podcasts, using: service)
 
-        #expect(error == nil)
+        #expect(summary.firstFailure == nil)
+        #expect(summary.refreshed == 2)
+        #expect(summary.failed == 0)
         #expect(transport.requestedURLStrings == [firstFeedURL, secondFeedURL])
         #expect(podcasts[0].episodes.count == 3)
         #expect(try context.fetch(FetchDescriptor<Episode>()).count == 3)
@@ -82,9 +88,11 @@ struct FeedRefreshSweepTests {
         let transport = try sweepStub(failures: failures)
         let service = FeedService(context: context, transport: transport.transport)
 
-        let error = await refreshAll(podcasts, using: service)
+        let summary = await refreshAll(podcasts, using: service)
 
-        #expect(error == nil)
+        #expect(summary.firstFailure == nil)
+        #expect(summary.failed == 0)
+        #expect(summary.refreshed == 0)
         #expect(transport.requestedURLStrings == [firstFeedURL])
     }
 
@@ -98,9 +106,10 @@ struct FeedRefreshSweepTests {
         let transport = try sweepStub(failures: failures)
         let service = FeedService(context: context, transport: transport.transport)
 
-        let error = await refreshAll(podcasts, using: service)
+        let summary = await refreshAll(podcasts, using: service)
 
-        #expect((error as? StubTransportError) == .unreachable(firstFeedURL))
+        #expect((summary.firstFailure?.error as? StubTransportError) == .unreachable(firstFeedURL))
+        #expect(summary.failed == 1)
     }
 
     /// A task cancelled before the loop begins issues no request at all — the
@@ -118,8 +127,47 @@ struct FeedRefreshSweepTests {
         let sweep = Task { @MainActor in await refreshAll(podcasts, using: service) }
         sweep.cancel()
 
-        #expect(await sweep.value == nil)
+        #expect(await sweep.value.firstFailure == nil)
+        #expect(await sweep.value.refreshed == 0)
         #expect(transport.requestedURLStrings.isEmpty)
+    }
+
+    /// The status line needs to know which feed is outstanding *before* the
+    /// fetch, not after it — reporting it afterwards would name the feed that
+    /// already answered.
+    @Test func eachStepIsReportedBeforeItsFeedIsFetched() async throws {
+        let context = try makeContext()
+        let podcasts = try subscribedPodcasts(in: context)
+        let transport = try sweepStub()
+        let service = FeedService(context: context, transport: transport.transport)
+        var steps: [FeedRefreshStep] = []
+
+        _ = await refreshAll(podcasts, using: service) { step in
+            steps.append(step)
+            // reported before the fetch: the first callback lands with nothing
+            // requested yet, the second with exactly one request behind it
+            #expect(transport.requestedURLStrings.count == step.index)
+        }
+
+        #expect(steps.map(\.host.redacted) == ["https://example.com", "https://example.com"])
+        #expect(steps.map(\.index) == [0, 1])
+        #expect(steps.allSatisfy { $0.total == 2 })
+    }
+
+    /// A dead feed among healthy ones is a partial success, and the summary is
+    /// what lets the screen say so instead of "the refresh failed".
+    @Test func aPartialSweepIsSummarisedAsBothCounts() async throws {
+        let context = try makeContext()
+        let podcasts = try subscribedPodcasts(in: context)
+        let failures: [String: any Error] = [secondFeedURL: StubTransportError.unreachable(secondFeedURL)]
+        let transport = try sweepStub(failures: failures)
+        let service = FeedService(context: context, transport: transport.transport)
+
+        let summary = await refreshAll(podcasts, using: service)
+
+        #expect(summary.refreshed == 1)
+        #expect(summary.failed == 1)
+        #expect(feedRefreshSummaryText(refreshed: summary.refreshed, failed: summary.failed) != nil)
     }
 
     @Test func anEmptyLibrarySweepsCleanly() async throws {
@@ -127,7 +175,7 @@ struct FeedRefreshSweepTests {
         let transport = try sweepStub()
         let service = FeedService(context: context, transport: transport.transport)
 
-        #expect(await refreshAll([], using: service) == nil)
+        #expect(await refreshAll([], using: service).firstFailure == nil)
         #expect(transport.requestedURLStrings.isEmpty)
         #expect(try context.fetch(FetchDescriptor<Podcast>()).isEmpty)
     }

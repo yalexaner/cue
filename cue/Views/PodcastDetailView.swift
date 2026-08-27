@@ -25,6 +25,7 @@ struct PodcastDetailView: View {
     let podcast: Podcast
 
     @State private var refreshErrorMessage: String?
+    @State private var status = FeedRefreshStatusModel()
     @State private var saveErrorMessage: String?
     @State private var downloadErrorText: String?
     @State private var pendingDeletion: PendingDownloadDeletion?
@@ -75,6 +76,7 @@ struct PodcastDetailView: View {
             }
         }
         .refreshable { await refresh() }
+        .feedRefreshStatusBar(status.statusText, isActive: true)
         .refreshErrorAlert($refreshErrorMessage)
         .errorAlert("Could Not Save", $saveErrorMessage)
         .errorAlert("Download Failed", $downloadErrorText)
@@ -222,13 +224,16 @@ struct PodcastDetailView: View {
     ///
     /// Navigating away cancels the refresh; that is not a failure to alert on.
     private func refresh() async {
+        let host = DiagnosticsHost(podcast.feedURL)
+        status.began(FeedRefreshStep(host: host, index: 0, total: 1))
+        defer { status.finished() }
         do {
             try await FeedService(context: context, diagnostics: diagnostics).refresh(podcast)
             refreshErrorMessage = nil
         } catch {
             // nil when the view went away mid-refresh; an alert on a screen
             // nobody is looking at is not a report
-            refreshErrorMessage = reportableFeedErrorMessage(for: error)
+            refreshErrorMessage = reportableFeedErrorMessage(for: error, host: host)
         }
     }
 }
