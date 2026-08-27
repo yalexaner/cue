@@ -14,7 +14,11 @@ mid-episode never destroys where you actually were.
 what runs today. Working now: subscribe to a feed by URL, browse a show's
 episodes, mark played, pull to refresh, and download episodes over a background
 `URLSession`. The Downloads tab shows active progress, safe failure details,
-cancel and retry above completed episodes grouped by show. Not built yet:
+cancel and retry above completed episodes grouped by show, with a per-phase
+transfer line (queued, connecting, downloading, stalled, finalizing) and an
+exportable on-device diagnostics log for reporting a failure. Refresh says which
+feed it is checking, downloaded rows show their own file size, and the add-feed
+sheet offers to paste an address from the clipboard. Not built yet:
 playback, session tracking, sleep timer, OPML import. See `ROADMAP.md`.
 
 ## Build

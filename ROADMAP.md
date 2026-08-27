@@ -598,6 +598,69 @@ transfer while its completed list remains based on file presence only.
 
 ---
 
+## 4.6 Diagnostics and download UX
+
+**Goal.** Make a device session self-explanatory: an exportable diagnostics log
+that says what actually failed, and transfer and refresh feedback that names the
+phase the user is looking at.
+
+**Files.** `Diagnostics/DiagnosticsSink.swift`,
+`Diagnostics/DiagnosticsRecord.swift`, `Diagnostics/DiagnosticsEvent.swift`,
+`Diagnostics/DiagnosticsSafeFields.swift`, `Diagnostics/DiagnosticsLine.swift`,
+`Diagnostics/DiagnosticsFileWriter.swift`,
+`Diagnostics/DiagnosticsEnvironment.swift`, `Diagnostics/DiagnosticsExport.swift`,
+`Download/DownloadDiagnostics.swift`, `Download/DownloadPhases.swift`,
+`Download/DownloadPacing.swift`, `Download/DownloadProgress.swift`,
+`Download/DownloadDeletion.swift`, `Download/BackgroundDownloaderRouting.swift`,
+`Feed/FeedService.swift`, `Models/Episode.swift`,
+`Views/DiagnosticsExportButton.swift`, `Views/DownloadIndicatorActivation.swift`,
+`Views/DownloadIndicatorPresentation.swift`, `Views/DownloadRows.swift`,
+`Views/FeedRefreshStatus.swift`, `Views/FeedRefreshStatusBar.swift`,
+`Views/FeedPasteOffer.swift`, `Views/AddFeedView.swift`,
+`Views/DiagnosticsExportErrorMessage.swift`, `Views/DownloadErrorMessage.swift`,
+`Views/DownloadListFormatting.swift`, `Views/ActiveDownloadFormatting.swift`,
+`Views/EpisodeListFormatting.swift`, `Views/FeedErrorMessage.swift`,
+`Views/FeedRefreshing.swift`, `Views/DownloadsView.swift`,
+`Views/PodcastDetailView.swift`, `Views/LibraryView.swift`,
+`Download/DownloadManager.swift`, `Download/DownloadAttempts.swift`,
+`Download/DownloadQueue.swift`, `Download/DownloadRelaunch.swift`,
+`Download/BackgroundDownloader.swift`, `Download/DownloadFinish.swift`,
+`Download/DownloadOwnership.swift`, `Feed/FeedDiagnostics.swift`,
+`App/CueApp.swift`, `Support/Info.plist`, `Config/App.xcconfig`
+
+**Tasks.**
+
+1. Split the files sitting against the 400-line `file_length` limit, before any
+   behaviour change.
+2. A diagnostics record whose fields cannot carry a secret: hosts and guids
+   enter through opaque sanitising value types, a guid is a truncated SHA-256
+   digest, an error reduces to bridged domain and code.
+3. An injected `DiagnosticsSink` with a no-op default, backed in production by
+   one serial file writer with a byte cap and one retained previous generation;
+   instrument the download and feed paths through it.
+4. Tell the truth about download failures: map `URLError` cases apart instead of
+   answering every one with "could not reach the server".
+5. Export the log through the share sheet and leave it reachable in Files.
+6. A six-phase transfer vocabulary — queued, connecting, indeterminate,
+   fraction, stalled, finalizing — with a transfer rate, a 30 s stall deadline
+   and a throttle that lifecycle transitions bypass; shown identically in
+   semantics by both download surfaces.
+7. Per-episode file size, a row download indicator that is a real control with
+   its own activation policy, refresh that reports which feed it is checking
+   against a 20 s idle timeout, and an add-feed sheet that offers paste without
+   a blind clipboard read.
+
+**Acceptance.** A failure names its domain and code in an exported log that
+contains no path, query, userinfo or unhashed guid. All six phases are
+reachable and both download screens answer a row with the same semantic phase
+and action. A feed request carries the 20 s idle timeout and revalidates, and a
+sweep reports partial success naming a host. Tapping the row indicator
+downloads, cancels, confirms a delete or shows a failure — never a silent retry.
+
+**Commit.** `feat(diagnostics): exportable log and transfer phase vocabulary`
+
+---
+
 ## 5 Playback
 
 **Goal.** Audio plays from local files, offline, with correct lock-screen
