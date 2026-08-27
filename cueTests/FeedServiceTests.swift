@@ -19,12 +19,18 @@ struct FeedServiceAddTests {
     /// The cache policy is a correctness requirement, not a tuning knob: refresh
     /// is manual only (spec §6), so a feed sending `Cache-Control: max-age`
     /// would otherwise make a pull-to-refresh a silent no-op.
-    @Test func theProductionRequestRevalidatesAndKeepsTheURLVerbatim() throws {
+    ///
+    /// The timeout is asserted here too: it is an *idle* timeout, so it bounds a
+    /// silent server rather than a large feed, and the inherited 60 s default is
+    /// a minute of a spinner saying nothing before the user is told anything.
+    @Test func theProductionRequestRevalidatesTimesOutAndKeepsTheURLVerbatim() throws {
         let url = try #require(URL(string: testFeedURL))
 
         let request = FeedService.feedRequest(for: url)
 
         #expect(request.cachePolicy == .reloadRevalidatingCacheData)
+        #expect(request.timeoutInterval == 20)
+        #expect(FeedService.requestTimeout == 20)
         #expect(request.url?.absoluteString == testFeedURL)
     }
 

@@ -9,7 +9,13 @@ import Foundation
 /// Every case names the offending value — the whole point of `httpStatus` and
 /// `emptyFeed` carrying the URL is that a private feed's 401/403 is diagnosable
 /// from the message alone.
-func feedErrorMessage(for error: Error) -> String {
+/// `host` names the feed the error came from and is only consulted for errors
+/// that carry no address of their own — a `URLError` says "The request timed
+/// out" and nothing more, which inside a sweep over several subscriptions does
+/// not say *which* one timed out. It is a `DiagnosticsHost` rather than a raw
+/// string so a full private-feed URL cannot be passed where scheme-and-host is
+/// meant; `nil` is for the callers that have no address to name.
+func feedErrorMessage(for error: Error, host: DiagnosticsHost?) -> String {
     switch error {
     case let failure as FeedService.Failure:
         return message(for: failure)
@@ -17,8 +23,10 @@ func feedErrorMessage(for error: Error) -> String {
         return message(for: failure)
     default:
         // transport errors (`URLError`, ATS rejections) propagate unwrapped, and
-        // their own descriptions are better than anything invented here
-        return error.localizedDescription
+        // their own descriptions are better than anything invented here — they
+        // just do not say where they happened
+        guard let host else { return error.localizedDescription }
+        return "\(host.redacted): \(error.localizedDescription)"
     }
 }
 
@@ -31,8 +39,8 @@ func feedErrorMessage(for error: Error) -> String {
 /// `catch let error where isCancellation(error)` clause, and a screen that
 /// forgets it pops "Refresh Failed" on a view the user just left — the same
 /// mistake `refreshAll(_:using:)` exists to keep out of the sweep.
-func reportableFeedErrorMessage(for error: Error) -> String? {
-    isCancellation(error) ? nil : feedErrorMessage(for: error)
+func reportableFeedErrorMessage(for error: Error, host: DiagnosticsHost?) -> String? {
+    isCancellation(error) ? nil : feedErrorMessage(for: error, host: host)
 }
 
 private func message(for failure: FeedService.Failure) -> String {

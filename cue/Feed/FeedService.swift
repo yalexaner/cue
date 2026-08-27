@@ -33,6 +33,18 @@ struct FeedService {
         case allEpisodesOwnedElsewhere(String)
     }
 
+    /// How long a feed request may go without receiving anything before it
+    /// fails.
+    ///
+    /// Apple defines `timeoutInterval` as an *idle* timeout — the clock restarts
+    /// on every byte — so this bounds a silent server, not a slow one, and a
+    /// large feed that keeps arriving is never cut off. The inherited default is
+    /// 60 s, which is a minute of a spinner saying nothing before the user is
+    /// told the host is unreachable; twenty seconds is long enough for a
+    /// congested mobile link and short enough to answer while the user is still
+    /// looking at the screen.
+    static let requestTimeout: TimeInterval = 20
+
     /// The request the production transport sends.
     ///
     /// Extracted from the closure so the cache policy is assertable: it is a
@@ -42,9 +54,12 @@ struct FeedService {
     /// answered from `URLCache` and the refresh would report success having
     /// fetched nothing. Revalidating still honours a 304, so a polite feed costs
     /// no more bandwidth than before.
+    ///
+    /// The idle timeout it also sets is `requestTimeout`.
     static func feedRequest(for url: URL) -> URLRequest {
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadRevalidatingCacheData
+        request.timeoutInterval = requestTimeout
         return request
     }
 
@@ -190,11 +205,7 @@ struct FeedService {
         do {
             (data, response) = try await transport(url)
         } catch {
-            diagnostics.record(
-                DiagnosticsEvent.feedFetchFailed(
-                    host: host, code: DiagnosticsErrorCode(error),
-                    elapsedMilliseconds: Self.elapsedMilliseconds(since: startedAt)
-                ).record)
+            recordFetchFailure(error, host: host, startedAt: startedAt)
             throw error
         }
 
@@ -210,7 +221,17 @@ struct FeedService {
         diagnostics.record(
             DiagnosticsEvent.feedFetchSucceeded(host: host, status: status, elapsedMilliseconds: elapsed).record)
 
-        let feed = try await Self.parse(data: data, sourceURL: urlString)
+        // a document that arrived and could not be read is a failure like any
+        // other: without this the log shows `feed.fetch_succeeded` and then
+        // nothing, which reads as an app that stopped rather than a feed that
+        // is broken
+        let feed: ParsedFeed
+        do {
+            feed = try await Self.parse(data: data, sourceURL: urlString)
+        } catch {
+            recordFetchFailure(error, host: host, startedAt: startedAt)
+            throw error
+        }
         // Cancel dismisses the add sheet while the request may already be
         // answered, and a view can go away mid-refresh the same way. Without
         // this the merge still commits, so the subscription the user backed out
@@ -218,16 +239,6 @@ struct FeedService {
         // consent. Callers treat cancellation as nothing to report.
         try Task.checkCancellation()
         return feed
-    }
-
-    /// Whole milliseconds since `start`, on a clock that cannot step backwards.
-    ///
-    /// `ContinuousClock` rather than `Date`: a wall-clock adjustment mid-fetch
-    /// would otherwise be logged as a negative or absurd duration.
-    private static func elapsedMilliseconds(since start: ContinuousClock.Instant) -> Int {
-        let elapsed = ContinuousClock.now - start
-        let components = elapsed.components
-        return Int(components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000)
     }
 
     /// Parses a fetched document off the main actor.
