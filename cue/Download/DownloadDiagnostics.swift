@@ -66,6 +66,9 @@ extension DownloadManager {
             try? FileManager.default.removeItem(at: tempURL)
             throw failure
         }
+        // the last byte has arrived and the file has not landed yet: the
+        // window the reported 100 %-then-fail failure lives in (decision 10)
+        publishFinalizing(forGUID: guid, heldBy: token)
         try await finishDownload(tempURL: tempURL, response: response, forGUID: guid, heldBy: token)
     }
 
@@ -100,7 +103,7 @@ extension DownloadManager {
 /// all. The record lives on the attempt, so it is dropped when the attempt
 /// retires and a retry starts again from nothing.
 func crossedDecile(for progress: DownloadProgress, lastLogged: Int?) -> Int? {
-    guard case .fraction(_, let value) = progress else { return nil }
+    guard let value = progress.fractionValue else { return nil }
     let bucket = min(max(Int((value * 10).rounded(.down)), 0), 10)
     guard bucket >= 1, bucket > (lastLogged ?? 0) else { return nil }
     return bucket

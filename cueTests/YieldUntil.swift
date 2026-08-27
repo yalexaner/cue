@@ -16,3 +16,20 @@ func yieldUntil(_ condition: () -> Bool) async {
         spins += 1
     }
 }
+
+/// Releases the clock's parked sleepers until `condition` holds, or gives up.
+///
+/// Arming a deadline or a trailing publication creates a `Task` that has not
+/// necessarily reached its `sleep` by the time the test calls `wake()`, and a
+/// `wake()` that arrives first releases nothing — the sleeper then parks for
+/// good and the test hangs on a scheduler turn that never comes. Retrying is
+/// what makes a *firing* test deterministic. Waking an empty set is a no-op, and
+/// a sleeper woken before its own guard is satisfied simply returns without
+/// writing.
+@MainActor
+func wake(_ clock: ManualDownloadClock, until condition: () -> Bool) async {
+    await yieldUntil {
+        clock.wake()
+        return condition()
+    }
+}

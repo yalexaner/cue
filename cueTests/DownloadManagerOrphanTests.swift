@@ -23,11 +23,13 @@ struct DownloadManagerOrphanTests {
 
     private func makeManager(
         context: ModelContext, base: URL,
-        episodeLookup: ((String) throws -> Episode?)? = nil
+        episodeLookup: ((String) throws -> Episode?)? = nil,
+        diagnostics: DiagnosticsSink = NoOpDiagnosticsSink()
     ) -> DownloadManager {
         DownloadManager(
             context: context, store: EpisodeStore(baseDirectory: base),
-            transport: failingFileTransport(), episodeLookup: episodeLookup)
+            transport: failingFileTransport(), episodeLookup: episodeLookup,
+            diagnostics: diagnostics)
     }
 
     private func stagedFile(in base: URL) throws -> URL {
@@ -138,6 +140,87 @@ struct DownloadManagerOrphanTests {
             }
 
             #expect(!FileManager.default.fileExists(atPath: staged.path))
+        }
+    }
+
+    // MARK: - Every discard leaves a line
+
+    /// A finished transfer whose episode is gone must not end the log in
+    /// silence.
+    ///
+    /// The unknown-guid branch returns *normally*, so the epilogue takes the
+    /// same path a success does and writes no terminal record of its own — the
+    /// exported log would show the request and its deciles and then stop, which
+    /// is the ambiguity the file exists to remove.
+    @Test func aFinishForAnEpisodeThatIsGoneRecordsTheDiscard() async throws {
+        try await withTemporaryBaseAsync { base in
+            let sink = RecordingDiagnosticsSink()
+            let manager = makeManager(
+                context: try makeContext(), base: base, episodeLookup: { _ in nil },
+                diagnostics: sink)
+            let staged = try stagedFile(in: base)
+
+            try await manager.finishDownload(
+                tempURL: staged, response: try okResponse(), forGUID: "guid-1", heldBy: UUID())
+
+            let discarded = try #require(sink.records(named: "download.discarded").first)
+            #expect(discarded.fieldsByKey["reason"] == "episode_missing")
+            #expect(discarded.fieldsByKey["attempt"] != nil)
+            #expect(discarded.fieldsByKey["guid"] == DiagnosticsGUID("guid-1").digest)
+            #expect(!FileManager.default.fileExists(atPath: staged.path))
+        }
+    }
+
+    /// The failed row the user sees must be explainable from the log.
+    ///
+    /// A throwing lookup writes `.failed` on screen, and that branch never
+    /// reaches `recordTerminalFailure` — so without its own record an owner
+    /// reporting "it says the library could not be read" hands over a log that
+    /// does not mention it.
+    @Test func aFailedEpisodeLookupIsRecordedAsAFailure() async throws {
+        try await withTemporaryBaseAsync { base in
+            let sink = RecordingDiagnosticsSink()
+            let context = try makeContext()
+            let episode = try makeEpisode(in: context)
+            let manager = makeManager(
+                context: context, base: base,
+                episodeLookup: { _ in throw StubTransportError.offline }, diagnostics: sink)
+            manager.adopt(
+                inFlightAttempts: [DownloadAttemptIdentity(taskIdentifier: 1, guid: episode.guid)])
+
+            await manager.handleCompletion(.failure(StubTransportError.offline), forGUID: episode.guid)
+
+            #expect(
+                manager.state(for: episode)
+                    == .failed(message: DownloadManager.episodeLookupFailureMessage))
+            let failed = try #require(sink.records(named: "download.failed").first)
+            #expect(failed.level == .error)
+            #expect(failed.fieldsByKey["guid"] == DiagnosticsGUID(episode.guid).digest)
+        }
+    }
+
+    /// An outcome for a guid another writer owns is a second finished transfer
+    /// being thrown away; the log has to say where it went.
+    @Test func anOutcomeForAnAlreadyOwnedGUIDRecordsTheDiscard() async throws {
+        try await withTemporaryBaseAsync { base in
+            let sink = RecordingDiagnosticsSink()
+            let context = try makeContext()
+            let episode = try makeEpisode(in: context)
+            let manager = makeManager(context: context, base: base, diagnostics: sink)
+            manager.adopt(
+                inFlightAttempts: [DownloadAttemptIdentity(taskIdentifier: 1, guid: episode.guid)])
+            let firstFile = try stagedFile(in: base)
+            let secondFile = try stagedFile(in: base)
+            let response = try okResponse()
+            let guid = episode.guid
+
+            async let first: Void = manager.handleCompletion(.success((firstFile, response)), forGUID: guid)
+            async let second: Void = manager.handleCompletion(.success((secondFile, response)), forGUID: guid)
+            _ = await (first, second)
+
+            let discarded = try #require(sink.records(named: "download.discarded").first)
+            #expect(discarded.fieldsByKey["reason"] == "guid_in_flight")
+            #expect(discarded.fieldsByKey["guid"] == DiagnosticsGUID(guid).digest)
         }
     }
 }

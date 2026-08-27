@@ -242,20 +242,23 @@ private struct EpisodeRow: View {
 
     @ViewBuilder
     private func downloadProgress(_ progress: DownloadProgress) -> some View {
-        switch progress {
-        case .waiting:
-            Text("Waiting…")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("Download Waiting")
-        case .indeterminate:
-            ProgressView()
-                .accessibilityLabel("Downloading")
-        case .fraction(_, let value):
-            ProgressView(value: value)
-                .frame(width: 48)
-                .accessibilityLabel("Downloading")
-                .accessibilityValue(value.formatted(.percent.precision(.fractionLength(0))))
+        let status = compactTransferStatus(progress)
+        HStack(spacing: 6) {
+            if let value = status.fractionValue {
+                ProgressView(value: value)
+                    .frame(width: 48)
+            } else if status.showsSpinner {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            if let text = status.text {
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(transferStatusText(progress))
     }
 }
