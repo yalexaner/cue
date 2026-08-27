@@ -47,7 +47,7 @@ struct ActiveDownloadFormattingTests {
         let failed = activeEpisode(in: context, guid: "failed", podcast: ann)
         let episodes = [downloading.guid: downloading, failed.guid: failed]
         var states: [String: DownloadManager.DownloadState] = [:]
-        states[downloading.guid] = .downloading(.waiting)
+        states[downloading.guid] = .downloading(.connecting)
         states[failed.guid] = .failed(message: "Failed")
 
         let rows = activeDownloads(episodesByGUID: episodes, states: states)
@@ -71,7 +71,7 @@ struct ActiveDownloadFormattingTests {
         let all = [annUndated, zedEpisode, annTieB, annNew, annTieA]
         let episodes = Dictionary(uniqueKeysWithValues: all.map { ($0.guid, $0) })
         let states = Dictionary(
-            uniqueKeysWithValues: all.map { ($0.guid, DownloadManager.DownloadState.downloading(.waiting)) })
+            uniqueKeysWithValues: all.map { ($0.guid, DownloadManager.DownloadState.downloading(.connecting)) })
 
         let rows = activeDownloads(episodesByGUID: episodes, states: states)
 
@@ -83,7 +83,7 @@ struct ActiveDownloadFormattingTests {
         let podcast = activePodcast(in: context, title: "Show")
         let known = activeEpisode(in: context, guid: "known", podcast: podcast)
         var states: [String: DownloadManager.DownloadState] = [:]
-        states["known"] = .downloading(.waiting)
+        states["known"] = .downloading(.connecting)
         states["unknown"] = .failed(message: "Failed")
 
         let rows = activeDownloads(episodesByGUID: [known.guid: known], states: states)
@@ -105,7 +105,7 @@ struct ActiveDownloadFormattingTests {
         let all = [zedEpisode, orphan, shown]
         let episodes = Dictionary(uniqueKeysWithValues: all.map { ($0.guid, $0) })
         let states = Dictionary(
-            uniqueKeysWithValues: all.map { ($0.guid, DownloadManager.DownloadState.downloading(.waiting)) })
+            uniqueKeysWithValues: all.map { ($0.guid, DownloadManager.DownloadState.downloading(.connecting)) })
 
         let rows = activeDownloads(episodesByGUID: episodes, states: states)
 

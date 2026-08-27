@@ -170,11 +170,11 @@ struct EpisodeDownloadStateTests {
     /// A transfer in flight outranks the file it is about to replace.
     @Test func aTransferInFlightOutranksAStoredFilename() {
         #expect(
-            episodeDownloadState(localFilename: "a.mp3", transfer: .downloading(.waiting))
-                == .downloading(.waiting))
+            episodeDownloadState(localFilename: "a.mp3", transfer: .downloading(.connecting))
+                == .downloading(.connecting))
         #expect(
-            episodeDownloadState(localFilename: nil, transfer: .downloading(.waiting))
-                == .downloading(.waiting))
+            episodeDownloadState(localFilename: nil, transfer: .downloading(.connecting))
+                == .downloading(.connecting))
         #expect(
             episodeDownloadState(
                 localFilename: nil, transfer: .downloading(.indeterminate(bytesWritten: 12)))
@@ -182,8 +182,8 @@ struct EpisodeDownloadStateTests {
         #expect(
             episodeDownloadState(
                 localFilename: nil,
-                transfer: .downloading(.fraction(bytesWritten: 50, value: 0.5)))
-                == .downloading(.fraction(bytesWritten: 50, value: 0.5)))
+                transfer: .downloading(.fraction(bytesWritten: 50, expectedBytes: 100)))
+                == .downloading(.fraction(bytesWritten: 50, expectedBytes: 100)))
     }
 
     /// A failed retry over a file that is still there is not a failed episode.
@@ -212,6 +212,11 @@ struct DownloadRowActionTests {
     /// A running transfer offers Cancel rather than Delete, because deleting
     /// under a running move is a race.
     @Test func aRunningTransferOffersCancellation() {
-        #expect(downloadAction(for: .downloading(.waiting)) == .cancel)
+        // every phase, queued included: a queued transfer is cancellable before
+        // it has a session task, and a connecting one has no file to delete
+        #expect(downloadAction(for: .downloading(.queued(position: 3))) == .cancel)
+        #expect(downloadAction(for: .downloading(.connecting)) == .cancel)
+        #expect(downloadAction(for: .downloading(.indeterminate(bytesWritten: 8))) == .cancel)
+        #expect(downloadAction(for: .downloading(.fraction(bytesWritten: 1, expectedBytes: 2))) == .cancel)
     }
 }

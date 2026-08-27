@@ -51,6 +51,7 @@ extension DownloadManager {
             isTransferring = false
         } else {
             waiting.removeFirst().continuation.resume()
+            reindexQueuedTransfers()
         }
     }
 
@@ -61,6 +62,49 @@ extension DownloadManager {
     func cancelWaiter(_ matches: (TransferWaiter) -> Bool) -> Bool {
         guard let index = waiting.firstIndex(where: matches) else { return false }
         waiting.remove(at: index).continuation.resume(throwing: CancellationError())
+        reindexQueuedTransfers()
         return true
+    }
+
+    /// Republishes every queued transfer's place in line.
+    ///
+    /// The position a row shows is derived from the FIFO array rather than
+    /// stored on the attempt, so there is one source of truth and no way for a
+    /// removal to leave a stale number on screen. Called whenever the array
+    /// shrinks — a slot handed on, a queued transfer cancelled — and the write
+    /// is immediate rather than throttled, because a lifecycle change the user
+    /// caused must not wait for the next byte callback.
+    ///
+    /// A waiter whose state is not a queued transfer is skipped: it may have
+    /// failed, been retired, or not yet published anything.
+    func reindexQueuedTransfers() {
+        for (index, waiter) in waiting.enumerated() {
+            guard case .downloading(let published)? = states[waiter.guid] else { continue }
+            guard case .queued = published else { continue }
+            let reindexed = DownloadProgress.queued(position: index + 1)
+            guard reindexed.rendersDifferently(from: published) else { continue }
+            invalidatePendingPublication(forGUID: waiter.guid)
+            states[waiter.guid] = .downloading(reindexed)
+        }
+    }
+
+    /// Moves a queued transfer to `connecting` once it owns the slot, and
+    /// starts the clock the stall deadline measures against.
+    ///
+    /// The state write happens only from `queued`: an attempt that already
+    /// reported bytes, failed or retired must not be dragged back to a
+    /// pre-transfer phase. The deadline is armed either way — taking the slot is
+    /// the last thing that demonstrably happened, and a connection that never
+    /// answers is exactly what the stalled phase exists to name.
+    func publishConnecting(forGUID guid: String) {
+        if var attempt = attempts[guid] {
+            attempt.lastIncreaseAt = clock.now()
+            attempts[guid] = attempt
+            scheduleStallDeadline(forGUID: guid)
+        }
+        guard case .downloading(let published)? = states[guid] else { return }
+        guard case .queued = published else { return }
+        invalidatePendingPublication(forGUID: guid)
+        states[guid] = .downloading(.connecting)
     }
 }

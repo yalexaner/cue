@@ -173,8 +173,8 @@ struct DownloadDiagnosticsTests {
     // MARK: - Decile bucketing
 
     @Test func repeatedCallbacksInsideOneDecileLogOnce() {
-        let first = DownloadProgress.fraction(bytesWritten: 30, value: 0.31)
-        let again = DownloadProgress.fraction(bytesWritten: 35, value: 0.38)
+        let first = DownloadProgress.fraction(bytesWritten: 31, expectedBytes: 100)
+        let again = DownloadProgress.fraction(bytesWritten: 38, expectedBytes: 100)
 
         #expect(crossedDecile(for: first, lastLogged: nil) == 3)
         #expect(crossedDecile(for: again, lastLogged: 3) == nil)
@@ -182,7 +182,7 @@ struct DownloadDiagnosticsTests {
 
     /// Only the bucket actually reached, not every one skipped over.
     @Test func aMultiDecileJumpLogsOnlyTheBucketReached() {
-        let jumped = DownloadProgress.fraction(bytesWritten: 900, value: 0.94)
+        let jumped = DownloadProgress.fraction(bytesWritten: 94, expectedBytes: 100)
 
         #expect(crossedDecile(for: jumped, lastLogged: 1) == 9)
     }
@@ -191,8 +191,8 @@ struct DownloadDiagnosticsTests {
     /// is; there is no decile to be in.
     @Test func anUnknownTotalHasNoDecile() {
         #expect(crossedDecile(for: .indeterminate(bytesWritten: 4096), lastLogged: nil) == nil)
-        #expect(crossedDecile(for: .waiting, lastLogged: nil) == nil)
-        #expect(crossedDecile(for: .fraction(bytesWritten: 1, value: 0.04), lastLogged: nil) == nil)
+        #expect(crossedDecile(for: .connecting, lastLogged: nil) == nil)
+        #expect(crossedDecile(for: .fraction(bytesWritten: 4, expectedBytes: 100), lastLogged: nil) == nil)
     }
 
     /// The highest logged decile lives on the attempt, so a retry — a new
@@ -207,7 +207,7 @@ struct DownloadDiagnosticsTests {
                 context: context, store: EpisodeStore(baseDirectory: base),
                 transport: stub.transport, diagnostics: sink)
 
-            stub.reportOnNextAnswer(.fraction(bytesWritten: 60, value: 0.6))
+            stub.reportOnNextAnswer(.fraction(bytesWritten: 60, expectedBytes: 100))
             stub.setAttemptRegistrationHandler { identifier, guid in
                 await manager.registerStartedAttempt(taskIdentifier: identifier, forGUID: guid)
             }
@@ -300,6 +300,80 @@ struct DownloadDiagnosticsTests {
 
             #expect(sink.records(named: "download.failed").isEmpty)
             #expect(sink.records(named: "download.cancelled").count == 1)
+        }
+    }
+
+    /// A request that ends before an attempt exists is still recorded.
+    ///
+    /// The invalid-address guard runs before ownership is claimed, so there is
+    /// no attempt to name — and left silent it leaves `download.requested`
+    /// followed by nothing, which in an export is indistinguishable from a
+    /// transfer that never terminated.
+    @Test func aRequestRejectedBeforeAnyAttemptIsRecordedAsNotStarted() async throws {
+        try await withTemporaryBaseAsync { base in
+            let context = try makeContext()
+            let episode = try makeEpisode(in: context, enclosureURL: "ftp://example.com/1.mp3")
+            let sink = RecordingDiagnosticsSink()
+            let manager = DownloadManager(
+                context: context, store: EpisodeStore(baseDirectory: base),
+                transport: failingFileTransport(), diagnostics: sink)
+
+            await #expect(throws: DownloadManager.Failure.self) { try await manager.download(episode) }
+
+            #expect(sink.eventNames == ["download.requested", "download.not_started"])
+            let record = try #require(sink.records(named: "download.not_started").first)
+            #expect(record.level == .error)
+            #expect(record.fieldsByKey["guid"] == DiagnosticsGUID("guid-1").digest)
+            for field in record.fields { #expect(!field.value.contains("ftp://")) }
+        }
+    }
+
+    /// The deletion record follows the removal it describes.
+    ///
+    /// `deleteDownload` puts the columns and the state back when the file cannot
+    /// be removed, so a record written ahead of the removal asserts a deletion
+    /// that was rolled back — in the one artifact meant to settle what happened.
+    @Test func aDeletionThatFailsRecordsNothing() async throws {
+        try await withTemporaryBaseAsync { base in
+            let context = try makeContext()
+            let episode = try makeEpisode(in: context)
+            let sink = RecordingDiagnosticsSink()
+            let manager = DownloadManager(
+                context: context, store: EpisodeStore(baseDirectory: base),
+                transport: failingFileTransport(), diagnostics: sink)
+            // a name the store refuses to resolve, so the removal throws while
+            // the columns still claim a file
+            episode.localFilename = "../escape.mp3"
+            episode.downloadedAt = Date()
+            try context.save()
+
+            #expect(throws: EpisodeStore.Failure.self) { try manager.deleteDownload(for: episode) }
+
+            #expect(sink.records(named: "download.deleted").isEmpty)
+            #expect(episode.localFilename == "../escape.mp3")
+        }
+    }
+
+    /// The successful path still records it — once, and after the file is gone.
+    @Test func aSuccessfulDeletionRecordsItAfterTheFileIsRemoved() async throws {
+        try await withTemporaryBaseAsync { base in
+            let context = try makeContext()
+            let episode = try makeEpisode(in: context)
+            let sink = RecordingDiagnosticsSink()
+            let store = EpisodeStore(baseDirectory: base)
+            let manager = DownloadManager(
+                context: context, store: store, transport: failingFileTransport(), diagnostics: sink)
+            try store.prepareEpisodesDirectory()
+            let filename = "kept.mp3"
+            try Data("bytes".utf8).write(to: store.url(forRelativeFilename: filename))
+            episode.localFilename = filename
+            episode.downloadedAt = Date()
+            try context.save()
+
+            try manager.deleteDownload(for: episode)
+
+            #expect(sink.records(named: "download.deleted").count == 1)
+            #expect(try store.fileExists(forRelativeFilename: filename) == false)
         }
     }
 }

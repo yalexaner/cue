@@ -38,21 +38,24 @@ struct ActiveDownloadRow<Action: View>: View {
     @ViewBuilder
     private var transferStatus: some View {
         switch transfer.state {
-        case .downloading(.waiting):
-            Text("Waiting…")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        case .downloading(.indeterminate):
-            ProgressView()
-                .accessibilityLabel("Downloading")
-        case .downloading(.fraction(_, let value)):
-            ProgressView(value: value)
-                .accessibilityLabel("Downloading")
-                .accessibilityValue(value.formatted(.percent.precision(.fractionLength(0))))
+        case .downloading(let progress):
+            VStack(alignment: .leading, spacing: 4) {
+                if let value = progress.fractionValue {
+                    ProgressView(value: value)
+                        .accessibilityHidden(true)
+                }
+                Text(transferStatusText(progress))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(transferStatusText(progress))
         case .failed(let message):
             Label(message, systemImage: "exclamationmark.triangle.fill")
                 .font(.caption)
                 .foregroundStyle(.orange)
+                .lineLimit(3)
         }
     }
 }

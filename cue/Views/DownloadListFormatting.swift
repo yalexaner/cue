@@ -92,7 +92,9 @@ func episodeDownloadState(
 ///
 /// One question with one answer, so the swipe action and the context menu cannot
 /// drift apart: an episode mid-transfer offers Cancel rather than Delete,
-/// because deleting under a running move is a race.
+/// because deleting under a running move is a race. Every download phase answers
+/// the same way — a queued transfer is cancellable before it has a session task
+/// (`DownloadQueue.swift`), and a connecting one has nothing on disk to delete.
 func downloadAction(for state: EpisodeDownloadState) -> DownloadRowAction {
     switch state {
     case .notDownloaded, .failed:

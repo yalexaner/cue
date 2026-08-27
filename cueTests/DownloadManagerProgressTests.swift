@@ -4,39 +4,12 @@ import Testing
 
 @testable import cue
 
-/// Byte progress, attempt identity and the stale-event rules around them.
+/// Byte reporting and what reaches the published state.
 ///
 /// The downloader cases use only value-carrying seams. Constructing a
 /// `BackgroundDownloader` is safe; no case touches its session.
 @MainActor
 struct DownloadManagerProgressTests {
-    private static let enclosureURL = "https://example.com/audio/1.mp3"
-
-    private func makeEpisode(in context: ModelContext) throws -> Episode {
-        let podcast = Podcast(feedURL: testFeedURL, title: "Show")
-        context.insert(podcast)
-        let episode = Episode(guid: "guid-1", title: "Episode", enclosureURL: Self.enclosureURL)
-        episode.podcast = podcast
-        context.insert(episode)
-        try context.save()
-        return episode
-    }
-
-    private func makeManager(base: URL) throws -> DownloadManager {
-        DownloadManager(
-            context: try makeContext(), store: EpisodeStore(baseDirectory: base),
-            transport: failingFileTransport())
-    }
-
-    private func beginAttempt(
-        on manager: DownloadManager, taskIdentifier: Int = 1, guid: String = "guid-1"
-    ) throws -> UUID {
-        let token = try #require(manager.claimOwnership(of: guid))
-        manager.states[guid] = .downloading(.waiting)
-        manager.registerAttempt(taskIdentifier: taskIdentifier, forGUID: guid)
-        return token
-    }
-
     @Test func delegateProgressMapsTaskDescriptionToGUID() {
         let downloader = BackgroundDownloader()
         let events = RecordedProgressEvents()
@@ -53,7 +26,7 @@ struct DownloadManagerProgressTests {
             expectedBytes: 100)
 
         let expected = RecordedProgress(
-            taskIdentifier: 7, guid: "guid-1", progress: .fraction(bytesWritten: 25, value: 0.25))
+            taskIdentifier: 7, guid: "guid-1", progress: .fraction(bytesWritten: 25, expectedBytes: 100))
         #expect(events.values == [expected])
     }
 
@@ -65,56 +38,117 @@ struct DownloadManagerProgressTests {
             DownloadProgress.reported(bytesWritten: 12, expectedBytes: 0)
                 == .indeterminate(bytesWritten: 12))
         #expect(DownloadProgress.reported(bytesWritten: -1, expectedBytes: 100) == nil)
+        // over-delivery keeps the real total, so "X of Y" survives, while the
+        // ratio a bar draws is still clamped
         #expect(
             DownloadProgress.reported(bytesWritten: 150, expectedBytes: 100)
-                == .fraction(bytesWritten: 150, value: 1))
+                == .fraction(bytesWritten: 150, expectedBytes: 100))
+        #expect(DownloadProgress.fraction(bytesWritten: 150, expectedBytes: 100).fractionValue == 1)
+        #expect(DownloadProgress.fraction(bytesWritten: 0, expectedBytes: 100).fractionValue == 0)
+        // a total that never came through `reported` cannot divide
+        #expect(DownloadProgress.fraction(bytesWritten: 10, expectedBytes: 0).fractionValue == nil)
+        #expect(DownloadProgress.connecting.fractionValue == nil)
+        #expect(DownloadProgress.queued(position: 2).bytesWritten == 0)
+        #expect(DownloadProgress.connecting.bytesWritten == 0)
+    }
+
+    /// A queue position is displayed, so a reindex must always redraw; the
+    /// phases before it are stable, and only whole percent moves a bar.
+    @Test func onlyVisibleChangesAreWorthPublishing() {
+        let queued = DownloadProgress.queued(position: 2)
+        #expect(!queued.rendersDifferently(from: .queued(position: 2)))
+        #expect(queued.rendersDifferently(from: .queued(position: 1)))
+        #expect(queued.rendersDifferently(from: .connecting))
+        #expect(!DownloadProgress.connecting.rendersDifferently(from: .connecting))
+        #expect(DownloadProgress.connecting.rendersDifferently(from: .indeterminate(bytesWritten: 1)))
+        // an indeterminate transfer now shows its byte count, so a byte change
+        // is a redraw; the flood is held off by the throttle, not by pretending
+        // nothing moved
+        #expect(
+            DownloadProgress.indeterminate(bytesWritten: 9)
+                .rendersDifferently(from: .indeterminate(bytesWritten: 4)))
+        #expect(
+            !DownloadProgress.indeterminate(bytesWritten: 9)
+                .rendersDifferently(from: .indeterminate(bytesWritten: 9)))
+        // the rate is displayed too, bucketed to whole kilobytes per second
+        #expect(
+            DownloadProgress.indeterminate(bytesWritten: 9, bytesPerSecond: 4096)
+                .rendersDifferently(from: .indeterminate(bytesWritten: 9, bytesPerSecond: 8192)))
+        #expect(
+            !DownloadProgress.indeterminate(bytesWritten: 9, bytesPerSecond: 4096)
+                .rendersDifferently(from: .indeterminate(bytesWritten: 9, bytesPerSecond: 4100)))
+        // the two phases after the bytes stop are their own rows
+        #expect(
+            DownloadProgress.stalled(bytesWritten: 500, expectedBytes: 1000)
+                .rendersDifferently(from: .fraction(bytesWritten: 500, expectedBytes: 1000)))
+        #expect(
+            DownloadProgress.finalizing(bytesWritten: 1000)
+                .rendersDifferently(from: .fraction(bytesWritten: 1000, expectedBytes: 1000)))
+        let half = DownloadProgress.fraction(bytesWritten: 500, expectedBytes: 1000)
+        // the byte count is displayed beside the bar, so two bytes apart is a
+        // different row even at the same whole percent
+        #expect(half.rendersDifferently(from: .fraction(bytesWritten: 502, expectedBytes: 1000)))
+        #expect(!half.rendersDifferently(from: .fraction(bytesWritten: 500, expectedBytes: 1000)))
+        #expect(half.rendersDifferently(from: .fraction(bytesWritten: 510, expectedBytes: 1000)))
+        // the same bytes against a corrected total is a different bar
+        #expect(half.rendersDifferently(from: .fraction(bytesWritten: 500, expectedBytes: 2000)))
     }
 
     @Test func lowerByteUpdatesAreDroppedEvenWhenTheyArriveLater() async throws {
         try await withTemporaryBaseAsync { base in
-            let manager = try makeManager(base: base)
-            _ = try beginAttempt(on: manager)
+            let manager = try makeProgressManager(base: base)
+            _ = try beginProgressAttempt(on: manager)
 
             manager.handleProgress(
                 taskIdentifier: 1, guid: "guid-1",
-                progress: .fraction(bytesWritten: 80, value: 0.8))
+                progress: .fraction(bytesWritten: 80, expectedBytes: 100))
             manager.handleProgress(
                 taskIdentifier: 1, guid: "guid-1",
-                progress: .fraction(bytesWritten: 40, value: 0.4))
+                progress: .fraction(bytesWritten: 40, expectedBytes: 100))
 
-            #expect(manager.states["guid-1"] == .downloading(.fraction(bytesWritten: 80, value: 0.8)))
+            #expect(manager.states["guid-1"] == .downloading(.fraction(bytesWritten: 80, expectedBytes: 100)))
         }
     }
 
     @Test func equalBytesCanBecomeKnownAndAcceptACorrectedTotal() async throws {
         try await withTemporaryBaseAsync { base in
-            let manager = try makeManager(base: base)
-            _ = try beginAttempt(on: manager)
+            let clock = ManualDownloadClock()
+            let manager = try makeProgressManager(base: base, clock: clock)
+            _ = try beginProgressAttempt(on: manager)
 
             manager.handleProgress(
                 taskIdentifier: 1, guid: "guid-1",
                 progress: .indeterminate(bytesWritten: 50))
             #expect(manager.states["guid-1"] == .downloading(.indeterminate(bytesWritten: 50)))
 
+            // past the throttle interval, so each corrected total publishes on
+            // its own rather than through the trailing publication
+            clock.advance(by: DownloadPacing.publishInterval)
             manager.handleProgress(
                 taskIdentifier: 1, guid: "guid-1",
-                progress: .fraction(bytesWritten: 50, value: 0.5))
-            #expect(manager.states["guid-1"] == .downloading(.fraction(bytesWritten: 50, value: 0.5)))
+                progress: .fraction(bytesWritten: 50, expectedBytes: 100))
+            // no byte moved across the window, so the measured rate is zero
+            #expect(
+                manager.states["guid-1"]
+                    == .downloading(.fraction(bytesWritten: 50, expectedBytes: 100, bytesPerSecond: 0)))
 
+            clock.advance(by: DownloadPacing.publishInterval)
             manager.handleProgress(
                 taskIdentifier: 1, guid: "guid-1",
-                progress: .fraction(bytesWritten: 50, value: 0.25))
-            #expect(manager.states["guid-1"] == .downloading(.fraction(bytesWritten: 50, value: 0.25)))
+                progress: .fraction(bytesWritten: 50, expectedBytes: 200))
+            #expect(
+                manager.states["guid-1"]
+                    == .downloading(.fraction(bytesWritten: 50, expectedBytes: 200, bytesPerSecond: 0)))
         }
     }
 
     @Test func registrationCompletesBeforeTheFirstProgressEvent() async throws {
         try await withTemporaryBaseAsync { base in
-            let manager = try makeManager(base: base)
+            let manager = try makeProgressManager(base: base)
             let downloader = BackgroundDownloader()
             manager.registerCompletionRoute(with: downloader)
             _ = try #require(manager.claimOwnership(of: "guid-1"))
-            manager.states["guid-1"] = .downloading(.waiting)
+            manager.states["guid-1"] = .downloading(.connecting)
 
             await downloader.registerStart(taskIdentifier: 9, guid: "guid-1")
             downloader.reportProgress(
@@ -122,10 +156,10 @@ struct DownloadManagerProgressTests {
                 taskDescription: DownloadTaskIdentity.taskDescription(forGUID: "guid-1"),
                 bytesWritten: 30, expectedBytes: 60)
             await yieldUntil {
-                manager.states["guid-1"] == .downloading(.fraction(bytesWritten: 30, value: 0.5))
+                manager.states["guid-1"] == .downloading(.fraction(bytesWritten: 30, expectedBytes: 60))
             }
 
-            #expect(manager.states["guid-1"] == .downloading(.fraction(bytesWritten: 30, value: 0.5)))
+            #expect(manager.states["guid-1"] == .downloading(.fraction(bytesWritten: 30, expectedBytes: 60)))
         }
     }
 
@@ -136,7 +170,7 @@ struct DownloadManagerProgressTests {
             stub.setAttemptRegistrationHandler { _, _ in events.record("registered") }
             stub.setProgressHandler { _, _, _ in events.record("progress") }
             stub.reportOnNextAnswer(.indeterminate(bytesWritten: 10))
-            let url = try #require(URL(string: Self.enclosureURL))
+            let url = try #require(URL(string: DownloadProgressFixtures.enclosureURL))
 
             _ = try await DownloadTaskIdentity.$currentGUID.withValue("guid-1") {
                 try await stub.transport(url)
@@ -146,187 +180,22 @@ struct DownloadManagerProgressTests {
         }
     }
 
-    @Test func anAdoptedTaskCarriesItsIdentifierIntoProgressGating() async throws {
-        try await withTemporaryBaseAsync { base in
-            let manager = try makeManager(base: base)
-            manager.adopt(
-                inFlightAttempts: [DownloadAttemptIdentity(taskIdentifier: 17, guid: "guid-1")])
-
-            manager.handleProgress(
-                taskIdentifier: 16, guid: "guid-1",
-                progress: .indeterminate(bytesWritten: 10))
-            #expect(manager.states["guid-1"] == .downloading(.waiting))
-
-            manager.handleProgress(
-                taskIdentifier: 17, guid: "guid-1",
-                progress: .indeterminate(bytesWritten: 10))
-            #expect(manager.states["guid-1"] == .downloading(.indeterminate(bytesWritten: 10)))
-        }
-    }
-
-    /// A registration can only ever describe a transfer this process started.
-    ///
-    /// An adopted attempt already carries the identifier the session gave it;
-    /// letting a later registration re-point it would hand its progress to
-    /// another task and leave the real one unreachable.
-    @Test func aRegistrationCannotRepointAnAdoptedAttempt() async throws {
-        try await withTemporaryBaseAsync { base in
-            let manager = try makeManager(base: base)
-            manager.adopt(
-                inFlightAttempts: [DownloadAttemptIdentity(taskIdentifier: 5, guid: "guid-1")])
-
-            manager.registerAttempt(taskIdentifier: 6, forGUID: "guid-1")
-
-            manager.handleProgress(
-                taskIdentifier: 6, guid: "guid-1", progress: .indeterminate(bytesWritten: 10))
-            #expect(manager.states["guid-1"] == .downloading(.waiting))
-
-            manager.handleProgress(
-                taskIdentifier: 5, guid: "guid-1", progress: .indeterminate(bytesWritten: 10))
-            #expect(manager.states["guid-1"] == .downloading(.indeterminate(bytesWritten: 10)))
-        }
-    }
-
-    /// A guid resolved by an earlier completion is adoptable again once a new
-    /// attempt registers — otherwise a retry started after a relaunch delivery
-    /// would be refused by `adopt` and its row would sit idle mid-transfer.
-    @Test func registeringAFreshAttemptClearsTheResolvedGUIDMarker() async throws {
-        try await withTemporaryBaseAsync { base in
-            let manager = try makeManager(base: base)
-            await manager.handleCompletion(.failure(StubTransportError.offline), forGUID: "guid-1")
-            try #require(manager.resolvedGUIDs.contains("guid-1"))
-
-            _ = try beginAttempt(on: manager, taskIdentifier: 4)
-
-            #expect(!manager.resolvedGUIDs.contains("guid-1"))
-        }
-    }
-
-    @Test func unregisteredAndRetiredAttemptsDropProgress() async throws {
-        try await withTemporaryBaseAsync { base in
-            let manager = try makeManager(base: base)
-            manager.states["guid-1"] = .downloading(.waiting)
-            manager.handleProgress(
-                taskIdentifier: 1, guid: "guid-1",
-                progress: .indeterminate(bytesWritten: 10))
-            #expect(manager.states["guid-1"] == .downloading(.waiting))
-
-            // claimed but not yet registered — the window between claiming
-            // ownership and `registerStart`, where the attempt has no task
-            // identifier for a callback to match
-            let claimed = try #require(manager.claimOwnership(of: "guid-1"))
-            manager.handleProgress(
-                taskIdentifier: 1, guid: "guid-1",
-                progress: .indeterminate(bytesWritten: 10))
-            #expect(manager.states["guid-1"] == .downloading(.waiting))
-            #expect(manager.releaseOwnership(of: "guid-1", heldBy: claimed))
-
-            let token = try beginAttempt(on: manager)
-            #expect(manager.releaseOwnership(of: "guid-1", heldBy: token))
-            manager.handleProgress(
-                taskIdentifier: 1, guid: "guid-1",
-                progress: .indeterminate(bytesWritten: 10))
-            #expect(manager.states["guid-1"] == .downloading(.waiting))
-        }
-    }
-
-    @Test func everyProgressPayloadSuppressesADuplicateDownload() async throws {
-        try await withTemporaryBaseAsync { base in
-            let context = try makeContext()
-            let episode = try makeEpisode(in: context)
-            let stub = DownloadTransportStub(stagingDirectory: base)
-            let manager = DownloadManager(
-                context: context, store: EpisodeStore(baseDirectory: base), transport: stub.transport)
-
-            manager.states[episode.guid] = .downloading(.waiting)
-            try await manager.download(episode)
-            manager.states[episode.guid] = .downloading(.indeterminate(bytesWritten: 10))
-            try await manager.download(episode)
-            manager.states[episode.guid] = .downloading(.fraction(bytesWritten: 10, value: 0.5))
-            try await manager.download(episode)
-
-            #expect(stub.requestedURLStrings.isEmpty)
-        }
-    }
-
-    @Test func terminalStatesRejectDelayedProgress() async throws {
-        try await withTemporaryBaseAsync { base in
-            let manager = try makeManager(base: base)
-
-            var token = try beginAttempt(on: manager, taskIdentifier: 1)
-            #expect(manager.releaseOwnership(of: "guid-1", heldBy: token))
-            manager.states["guid-1"] = nil
-            manager.handleProgress(
-                taskIdentifier: 1, guid: "guid-1",
-                progress: .indeterminate(bytesWritten: 10))
-            #expect(manager.states["guid-1"] == nil)
-
-            token = try beginAttempt(on: manager, taskIdentifier: 2)
-            #expect(manager.releaseOwnership(of: "guid-1", heldBy: token))
-            manager.states["guid-1"] = .failed(message: "failed")
-            manager.handleProgress(
-                taskIdentifier: 2, guid: "guid-1",
-                progress: .indeterminate(bytesWritten: 10))
-            #expect(manager.states["guid-1"] == .failed(message: "failed"))
-
-            token = try beginAttempt(on: manager, taskIdentifier: 3)
-            #expect(manager.releaseOwnership(of: "guid-1", heldBy: token))
-            manager.states["guid-1"] = nil
-            manager.handleProgress(
-                taskIdentifier: 3, guid: "guid-1",
-                progress: .indeterminate(bytesWritten: 10))
-            #expect(manager.states["guid-1"] == nil)
-        }
-    }
-
-    @Test func eachTerminalOutcomeRetiresItsExactAttempt() async throws {
-        try await withTemporaryBaseAsync { base in
-            let successContext = try makeContext()
-            let successEpisode = try makeEpisode(in: successContext)
-            let successStub = DownloadTransportStub(stagingDirectory: base)
-            let successManager = DownloadManager(
-                context: successContext, store: EpisodeStore(baseDirectory: base),
-                transport: successStub.transport)
-            try await successManager.download(successEpisode)
-            #expect(successManager.attempts["guid-1"] == nil)
-
-            let failureContext = try makeContext()
-            let failureEpisode = try makeEpisode(in: failureContext)
-            let failureManager = DownloadManager(
-                context: failureContext, store: EpisodeStore(baseDirectory: base),
-                transport: failingFileTransport())
-            await #expect(throws: StubTransportError.offline) {
-                try await failureManager.download(failureEpisode)
-            }
-            #expect(failureManager.attempts["guid-1"] == nil)
-
-            let cancellationContext = try makeContext()
-            let cancellationEpisode = try makeEpisode(in: cancellationContext)
-            let cancellationStub = DownloadTransportStub(stagingDirectory: base)
-            let cancellationManager = DownloadManager(
-                context: cancellationContext, store: EpisodeStore(baseDirectory: base),
-                transport: cancellationStub.transport)
-            let cancellation = Task { try await cancellationManager.download(cancellationEpisode) }
-            cancellationStub.whenAnswering { cancellation.cancel() }
-            await #expect(throws: CancellationError.self) { try await cancellation.value }
-            #expect(cancellationManager.attempts["guid-1"] == nil)
-        }
-    }
-
     /// Byte callbacks arrive many times a second, and every published state
     /// re-evaluates both download screens, so a report that would draw the same
     /// row is recorded on the attempt without being published.
     @Test func progressThatWouldRedrawTheSameRowIsNotPublished() throws {
         try withTemporaryBase { base in
-            let manager = try makeManager(base: base)
-            _ = try beginAttempt(on: manager, taskIdentifier: 1)
-            let half = DownloadProgress.fraction(bytesWritten: 500, value: 0.5)
-            let nudged = DownloadProgress.fraction(bytesWritten: 502, value: 0.502)
+            let clock = ManualDownloadClock()
+            let manager = try makeProgressManager(base: base, clock: clock)
+            _ = try beginProgressAttempt(on: manager, taskIdentifier: 1)
+            let half = DownloadProgress.fraction(bytesWritten: 500, expectedBytes: 1000)
+            let nudged = DownloadProgress.fraction(bytesWritten: 502, expectedBytes: 1000)
 
             manager.handleProgress(taskIdentifier: 1, guid: "guid-1", progress: half)
             #expect(manager.states["guid-1"] == .downloading(half))
 
-            // the same whole percent: the attempt advances, the row does not
+            // inside the throttle interval: the attempt advances, the row does
+            // not, and the report is deferred rather than dropped
             manager.handleProgress(taskIdentifier: 1, guid: "guid-1", progress: nudged)
             #expect(manager.states["guid-1"] == .downloading(half))
             #expect(manager.attempts["guid-1"]?.progress == nudged)
@@ -334,31 +203,17 @@ struct DownloadManagerProgressTests {
             // and a later report behind the unpublished one is still refused
             manager.handleProgress(
                 taskIdentifier: 1, guid: "guid-1",
-                progress: .fraction(bytesWritten: 501, value: 0.501))
+                progress: .fraction(bytesWritten: 501, expectedBytes: 1000))
             #expect(manager.attempts["guid-1"]?.progress == nudged)
 
-            let stepped = DownloadProgress.fraction(bytesWritten: 510, value: 0.51)
+            clock.advance(by: DownloadPacing.publishInterval)
+            let stepped = DownloadProgress.fraction(bytesWritten: 510, expectedBytes: 1000)
             manager.handleProgress(taskIdentifier: 1, guid: "guid-1", progress: stepped)
-            #expect(manager.states["guid-1"] == .downloading(stepped))
-        }
-    }
-
-    @Test func anOldTaskCannotUpdateARetry() async throws {
-        try await withTemporaryBaseAsync { base in
-            let manager = try makeManager(base: base)
-            let oldToken = try beginAttempt(on: manager, taskIdentifier: 1)
-            #expect(manager.releaseOwnership(of: "guid-1", heldBy: oldToken))
-            _ = try beginAttempt(on: manager, taskIdentifier: 2)
-
-            manager.handleProgress(
-                taskIdentifier: 1, guid: "guid-1",
-                progress: .fraction(bytesWritten: 90, value: 0.9))
-            #expect(manager.states["guid-1"] == .downloading(.waiting))
-
-            manager.handleProgress(
-                taskIdentifier: 2, guid: "guid-1",
-                progress: .fraction(bytesWritten: 20, value: 0.2))
-            #expect(manager.states["guid-1"] == .downloading(.fraction(bytesWritten: 20, value: 0.2)))
+            // ten bytes over the one second the clock was advanced by
+            #expect(
+                manager.states["guid-1"]
+                    == .downloading(
+                        .fraction(bytesWritten: 510, expectedBytes: 1000, bytesPerSecond: 10)))
         }
     }
 }

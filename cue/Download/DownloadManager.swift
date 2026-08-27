@@ -139,12 +139,24 @@ final class DownloadManager {
     var isTransferring = false
     var waiting: [TransferWaiter] = []
 
+    /// The armed stall deadline per guid, and the one deferred byte
+    /// publication per guid. Internal because the phase machinery lives in
+    /// `DownloadPhases.swift`; kept off the attempt record so that record stays
+    /// a comparable value.
+    var stallDeadlines: [String: Task<Void, Never>] = [:]
+    var pendingPublications: [String: Task<Void, Never>] = [:]
+
+    /// Time, behind a seam, so stall deadlines, the throttle and the rate
+    /// window are all exercised without a test ever sleeping.
+    let clock: DownloadClock
+
     init(
         context: ModelContext, store: EpisodeStore = EpisodeStore(),
         transport: @escaping FileTransport, deliveryBarrier: @escaping DeliveryBarrier = {},
         cancellationRequest: @escaping CancellationRequest = { _, _ in },
         episodeLookup: ((String) throws -> Episode?)? = nil,
-        diagnostics: DiagnosticsSink = NoOpDiagnosticsSink()
+        diagnostics: DiagnosticsSink = NoOpDiagnosticsSink(),
+        clock: DownloadClock = SystemDownloadClock()
     ) {
         self.context = context
         self.store = store
@@ -153,6 +165,7 @@ final class DownloadManager {
         self.transport = transport
         self.deliveryBarrier = deliveryBarrier
         self.cancellationRequest = cancellationRequest
+        self.clock = clock
     }
 
     /// The state of this episode's transfer, or `nil` when it is not in flight.
@@ -186,6 +199,7 @@ final class DownloadManager {
         guard let url = Self.downloadURL(for: enclosureURL) else {
             let failure = Failure.invalidEnclosureURL(enclosureURL)
             states[guid] = failureState(for: failure)
+            record(.downloadNotStarted(guid: loggedGUID, code: DiagnosticsErrorCode(failure)))
             throw failure
         }
 
@@ -197,17 +211,22 @@ final class DownloadManager {
         // before the slot, not after: a queued transfer with no state reads as
         // "not downloaded", so the row keeps offering Download and a second tap
         // fetches the same episode twice
-        states[guid] = .downloading(.waiting)
+        // the queued position is the place this call is about to take in the
+        // FIFO array `acquireSlot` appends to; an uncontended transfer skips
+        // the queue entirely and is connecting from the start
+        let queuePosition = waiting.count + 1
+        states[guid] = .downloading(isTransferring ? .queued(position: queuePosition) : .connecting)
 
         do {
             if isTransferring {
-                record(.downloadQueued(guid: loggedGUID, attempt: attempt, position: waiting.count + 1))
+                record(.downloadQueued(guid: loggedGUID, attempt: attempt, position: queuePosition))
             }
             try await acquireSlot(forGUID: guid)
             defer { releaseSlot() }
 
             // The task may have been cancelled before it acquired the slot.
             try Task.checkCancellation()
+            publishConnecting(forGUID: guid)
 
             // never assume launch succeeded: `CueApp.init()` prepares the
             // directory non-fatally, so the writing path prepares it again and
@@ -239,8 +258,16 @@ final class DownloadManager {
             // a cancelled transfer is not a failed one — the user backed out.
             // Post-delivery failures already wrote their state and released the
             // token, so this answers `false` for them and writes nothing
+            //
+            // and only then is there anything left to record: `completeDelivery`
+            // has already written the terminal record for everything it caught,
+            // so this covers exactly the pre-transport exits it does not — a
+            // cancelled queue wait and a `prepareEpisodesDirectory()` that
+            // threw, which is a storage failure with no record at all otherwise
             if releaseOwnership(of: guid, heldBy: token) {
                 states[guid] = failureState(for: error)
+                recordTerminalFailure(
+                    error, guid: guid, attempt: attempt, enclosureURL: enclosureURL)
             }
             throw error
         }
@@ -257,10 +284,18 @@ final class DownloadManager {
         guard var attempt = attempts[guid] else { return }
         attempt.isCancellationRequested = true
         attempts[guid] = attempt
-        record(.downloadCancelled(guid: DiagnosticsGUID(guid), attempt: DiagnosticsAttemptID(token: attempt.token)))
+        let loggedGUID = DiagnosticsGUID(guid)
+        let loggedAttempt = DiagnosticsAttemptID(token: attempt.token)
+        // the request, not the outcome: an active transfer's terminal
+        // `download.cancelled` is written when the delegate delivers, and one
+        // event for both would make a single cancel read as two
+        record(.downloadCancelRequested(guid: loggedGUID, attempt: loggedAttempt))
 
         if cancelWaiter({ $0.guid == guid }) {
             if releaseOwnership(of: guid, heldBy: attempt.token) { states[guid] = nil }
+            // a queued attempt never reaches `completeDelivery`, so this is the
+            // one place its terminal record can be written
+            record(.downloadCancelled(guid: loggedGUID, attempt: loggedAttempt))
             return
         }
         // only a task this attempt owns may be named. An attempt whose session
