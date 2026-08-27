@@ -126,8 +126,12 @@ final class DownloadManager {
     /// and injected like every other seam rather than left settable, so no
     /// holder of the shared manager can redirect episode resolution mid-transfer.
     let episodeLookup: ((String) throws -> Episode?)?
+    /// Internal, like `context` and `store`: the finish, relaunch and deletion
+    /// routes all record, and they live in extensions in other files. Injected
+    /// with a no-op default, so no existing test writes to disk (decision 6).
+    let diagnostics: DiagnosticsSink
     private let transport: FileTransport
-    private let deliveryBarrier: DeliveryBarrier
+    let deliveryBarrier: DeliveryBarrier
     private let cancellationRequest: CancellationRequest
 
     /// The transfer slot and its queued waiters. Internal only because the
@@ -139,11 +143,13 @@ final class DownloadManager {
         context: ModelContext, store: EpisodeStore = EpisodeStore(),
         transport: @escaping FileTransport, deliveryBarrier: @escaping DeliveryBarrier = {},
         cancellationRequest: @escaping CancellationRequest = { _, _ in },
-        episodeLookup: ((String) throws -> Episode?)? = nil
+        episodeLookup: ((String) throws -> Episode?)? = nil,
+        diagnostics: DiagnosticsSink = NoOpDiagnosticsSink()
     ) {
         self.context = context
         self.store = store
         self.episodeLookup = episodeLookup
+        self.diagnostics = diagnostics
         self.transport = transport
         self.deliveryBarrier = deliveryBarrier
         self.cancellationRequest = cancellationRequest
@@ -174,6 +180,9 @@ final class DownloadManager {
         // transfer the user asked for is already running
         guard states[guid]?.isDownloading != true else { return }
         let enclosureURL = episode.enclosureURL
+        let loggedGUID = DiagnosticsGUID(guid)
+        let host = DiagnosticsHost(enclosureURL)
+        record(.downloadRequested(guid: loggedGUID, host: host))
         guard let url = Self.downloadURL(for: enclosureURL) else {
             let failure = Failure.invalidEnclosureURL(enclosureURL)
             states[guid] = failureState(for: failure)
@@ -183,6 +192,7 @@ final class DownloadManager {
         // the token is taken before anything is written, so a completion routed
         // from the session while this transfer runs cannot write over it
         guard let token = claimOwnership(of: guid) else { return }
+        let attempt = DiagnosticsAttemptID(token: token)
 
         // before the slot, not after: a queued transfer with no state reads as
         // "not downloaded", so the row keeps offering Download and a second tap
@@ -190,6 +200,9 @@ final class DownloadManager {
         states[guid] = .downloading(.waiting)
 
         do {
+            if isTransferring {
+                record(.downloadQueued(guid: loggedGUID, attempt: attempt, position: waiting.count + 1))
+            }
             try await acquireSlot(forGUID: guid)
             defer { releaseSlot() }
 
@@ -205,6 +218,7 @@ final class DownloadManager {
             // the guid rides with the request so the production transport can
             // stamp it on the task; a stub simply ignores it
             try checkCancellation(of: guid, heldBy: token)
+            record(.downloadStarted(guid: loggedGUID, attempt: attempt, host: host))
             let delivered: Result<(URL, URLResponse), Error>
             do {
                 delivered = .success(
@@ -212,32 +226,19 @@ final class DownloadManager {
             } catch {
                 delivered = .failure(error)
             }
-            // the session has handed this outcome over — success or failure — so
-            // everything below is work the background-events handler waits for
-            defer { deliveryBarrier() }
-
-            do {
-                try checkCancellation(of: guid, heldBy: token)
-            } catch {
-                if case .success(let (tempURL, _)) = delivered {
-                    try? FileManager.default.removeItem(at: tempURL)
-                }
-                throw error
-            }
-            let (tempURL, response) = try delivered.get()
-            if let failure = Self.statusFailure(for: response, enclosureURL: enclosureURL) {
-                // the temporary file is ours once the transport answers, and an
-                // error page is not an episode
-                try? FileManager.default.removeItem(at: tempURL)
-                throw failure
-            }
-
-            try await finishDownload(tempURL: tempURL, response: response, forGUID: guid, heldBy: token)
-            // only while this transfer is still the guid's owner: a completion
-            // routed from the session may have taken it over
-            if releaseOwnership(of: guid, heldBy: token) { states[guid] = nil }
+            // The session has handed this outcome over, so from here on the
+            // work belongs to the background-events accounting — and the
+            // barrier that reports it is armed only now, never from the `catch`
+            // below, which also catches pre-transport exits (a cancelled queue
+            // wait, a failed `prepareEpisodesDirectory()`). Decrementing for a
+            // delivery that never happened can drive another delivery's count
+            // to zero and answer UIKit mid-finish (decision 8).
+            try await completeDelivery(
+                delivered, guid: guid, token: token, enclosureURL: enclosureURL, attempt: attempt)
         } catch {
-            // a cancelled transfer is not a failed one — the user backed out
+            // a cancelled transfer is not a failed one — the user backed out.
+            // Post-delivery failures already wrote their state and released the
+            // token, so this answers `false` for them and writes nothing
             if releaseOwnership(of: guid, heldBy: token) {
                 states[guid] = failureState(for: error)
             }
@@ -256,6 +257,7 @@ final class DownloadManager {
         guard var attempt = attempts[guid] else { return }
         attempt.isCancellationRequested = true
         attempts[guid] = attempt
+        record(.downloadCancelled(guid: DiagnosticsGUID(guid), attempt: DiagnosticsAttemptID(token: attempt.token)))
 
         if cancelWaiter({ $0.guid == guid }) {
             if releaseOwnership(of: guid, heldBy: attempt.token) { states[guid] = nil }

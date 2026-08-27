@@ -55,10 +55,24 @@ struct FeedService {
 
     private let context: ModelContext
     private let transport: Transport
+    /// Readable rather than private so the default is assertable on a
+    /// constructed service — asserting on the default *expression* only
+    /// restates the declaration, and would stay green if the initialiser were
+    /// changed to a writer over the real Application Support directory, which
+    /// is the precise accident the no-op exists to prevent.
+    let diagnostics: DiagnosticsSink
 
-    init(context: ModelContext, transport: @escaping Transport = FeedService.sharedTransport) {
+    /// The sink defaults to the no-op, so no existing test writes to disk. The
+    /// three views that construct this service read the real one out of the
+    /// environment (`DiagnosticsEnvironment.swift`); the service itself stays a
+    /// cheap struct built at the call site.
+    init(
+        context: ModelContext, transport: @escaping Transport = FeedService.sharedTransport,
+        diagnostics: DiagnosticsSink = NoOpDiagnosticsSink()
+    ) {
         self.context = context
         self.transport = transport
+        self.diagnostics = diagnostics
     }
 
     // MARK: - Entry points
@@ -164,11 +178,37 @@ struct FeedService {
             throw Failure.invalidURL(urlString)
         }
 
-        let (data, response) = try await transport(url)
-        // a non-HTTP response carries no status to judge; only HTTP is gated
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw Failure.httpStatus(http.statusCode, urlString)
+        // scheme and host only: a private feed's URL *is* its credential
+        // (spec §6), and the type is what enforces that rather than this call
+        // site remembering to trim
+        let host = DiagnosticsHost(urlString)
+        let startedAt = ContinuousClock.now
+        diagnostics.record(DiagnosticsEvent.feedFetchStarted(host: host).record)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await transport(url)
+        } catch {
+            diagnostics.record(
+                DiagnosticsEvent.feedFetchFailed(
+                    host: host, code: DiagnosticsErrorCode(error),
+                    elapsedMilliseconds: Self.elapsedMilliseconds(since: startedAt)
+                ).record)
+            throw error
         }
+
+        // a non-HTTP response carries no status to judge; only HTTP is gated,
+        // and a status of zero in the log says exactly that
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let elapsed = Self.elapsedMilliseconds(since: startedAt)
+        if status != 0, !(200..<300).contains(status) {
+            diagnostics.record(
+                DiagnosticsEvent.feedHTTPStatus(host: host, status: status, elapsedMilliseconds: elapsed).record)
+            throw Failure.httpStatus(status, urlString)
+        }
+        diagnostics.record(
+            DiagnosticsEvent.feedFetchSucceeded(host: host, status: status, elapsedMilliseconds: elapsed).record)
 
         let feed = try await Self.parse(data: data, sourceURL: urlString)
         // Cancel dismisses the add sheet while the request may already be
@@ -178,6 +218,16 @@ struct FeedService {
         // consent. Callers treat cancellation as nothing to report.
         try Task.checkCancellation()
         return feed
+    }
+
+    /// Whole milliseconds since `start`, on a clock that cannot step backwards.
+    ///
+    /// `ContinuousClock` rather than `Date`: a wall-clock adjustment mid-fetch
+    /// would otherwise be logged as a negative or absurd duration.
+    private static func elapsedMilliseconds(since start: ContinuousClock.Instant) -> Int {
+        let elapsed = ContinuousClock.now - start
+        let components = elapsed.components
+        return Int(components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000)
     }
 
     /// Parses a fetched document off the main actor.

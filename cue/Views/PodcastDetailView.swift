@@ -19,6 +19,7 @@ struct PodcastDetailView: View {
     )
 
     @Environment(\.modelContext) private var context
+    @Environment(\.diagnostics) private var diagnostics
     @Environment(DownloadManager.self) private var downloads
 
     let podcast: Podcast
@@ -169,7 +170,7 @@ struct PodcastDetailView: View {
     /// Navigating away cancels the refresh; that is not a failure to alert on.
     private func refresh() async {
         do {
-            try await FeedService(context: context).refresh(podcast)
+            try await FeedService(context: context, diagnostics: diagnostics).refresh(podcast)
             refreshErrorMessage = nil
         } catch {
             // nil when the view went away mid-refresh; an alert on a screen

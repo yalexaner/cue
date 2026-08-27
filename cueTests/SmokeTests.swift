@@ -17,6 +17,16 @@ struct SmokeTests {
         #expect(appTransportSecurity?["NSAllowsArbitraryLoads"] as? Bool == true)
     }
 
+    @Test func appSharesItsDocumentsDirectory() {
+        // the two settings the diagnostics export depends on: without them the
+        // exported file exists but is reachable only through the share sheet,
+        // never from Files or a cable. One arrives through `Config/App.xcconfig`
+        // and one through the partial `Info.plist`, so both routes are pinned.
+        #expect(Bundle.main.object(forInfoDictionaryKey: "UIFileSharingEnabled") as? Bool == true)
+        let inPlace = Bundle.main.object(forInfoDictionaryKey: "LSSupportsOpeningDocumentsInPlace")
+        #expect(inPlace as? Bool == true)
+    }
+
     @Test func fixturesLoadAsData() throws {
         #expect(!(try fixtureData(named: "durations", withExtension: "rss")).isEmpty)
         #expect(!(try fixtureData(named: "itunes", withExtension: "rss")).isEmpty)

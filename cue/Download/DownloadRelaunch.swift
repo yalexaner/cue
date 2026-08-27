@@ -30,16 +30,24 @@ extension DownloadManager {
         }
         downloader.setOrphanedCompletionHandler { [weak self] result, guid in
             Task { @MainActor [weak self] in
-                // the system may suspend the app once the downloader answers
-                // UIKit, and it waits for this
-                defer { downloader.completeDeliveredWork() }
                 guard let self else {
                     if case .success(let (tempURL, _)) = result {
                         try? FileManager.default.removeItem(at: tempURL)
                     }
+                    // the system waits for this even when there is nothing left
+                    // here to receive the outcome
+                    downloader.completeDeliveredWork()
                     return
                 }
                 await handleCompletion(result, forGUID: guid)
+                // out of `defer`, so it fires *after* the failure state and the
+                // log rather than as the inner scope exits, and after a flush:
+                // the records left unprotected by the old ordering were exactly
+                // the terminal ones (decision 8). A flush that achieves nothing
+                // must still complete delivery — a lost log is survivable, a
+                // never-answered UIKit handler is not
+                await diagnostics.flush()
+                downloader.completeDeliveredWork()
             }
         }
     }
@@ -80,6 +88,9 @@ extension DownloadManager {
         // is turned away by `orphanOwnership` instead of being handed the same
         // token and finishing alongside us
         markFinishing(guid: guid, heldBy: token)
+        // read before the finish, which may put the columns back: the failure
+        // record below needs a host to name, and only the episode has one
+        let enclosureURL = (try? episode(forGUID: guid))?.enclosureURL ?? ""
         states[guid] = .downloading(attempts[guid]?.progress ?? .waiting)
         do {
             try checkCancellation(of: guid, heldBy: token)
@@ -101,6 +112,9 @@ extension DownloadManager {
             if releaseOwnership(of: guid, heldBy: token) {
                 states[guid] = failureState(for: error)
             }
+            recordTerminalFailure(
+                error, guid: guid, attempt: DiagnosticsAttemptID(token: token),
+                enclosureURL: enclosureURL)
             // never `.public`: a `httpStatus` failure carries the enclosure URL,
             // and a private feed's URL is a token (spec §6)
             Self.logger.error("background download failed: \(error, privacy: .private)")
@@ -116,11 +130,16 @@ extension DownloadManager {
         for identity in identities where !resolvedGUIDs.contains(identity.guid) {
             guard attempts[identity.guid] == nil else { continue }
             guard
-                claimOwnership(
+                let token = claimOwnership(
                     of: identity.guid, origin: .adopted,
-                    taskIdentifier: identity.taskIdentifier) != nil
+                    taskIdentifier: identity.taskIdentifier)
             else { continue }
             states[identity.guid] = .downloading(.waiting)
+            record(
+                .downloadAdopted(
+                    guid: DiagnosticsGUID(identity.guid),
+                    attempt: DiagnosticsAttemptID(token: token),
+                    taskIdentifier: identity.taskIdentifier))
         }
     }
 

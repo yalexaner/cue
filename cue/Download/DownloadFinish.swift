@@ -29,21 +29,7 @@ extension DownloadManager {
         tempURL: URL, response: URLResponse?, forGUID guid: String,
         heldBy token: UUID
     ) async throws {
-        let found: Episode?
-        do {
-            found = try episode(forGUID: guid)
-        } catch {
-            // the claimed temporary file is ours from the moment the transport
-            // answers, and a lookup that throws leaves nothing below to deal
-            // with it — the transport route's `catch` only records the failure.
-            // A whole episode referenced by nothing would sit in `tmp` until the
-            // system purged it
-            try? FileManager.default.removeItem(at: tempURL)
-            throw error
-        }
-        guard let episode = found else {
-            Self.logger.notice("finished download for an unknown guid; discarding the file")
-            try? FileManager.default.removeItem(at: tempURL)
+        guard let episode = try episodeToRecord(forGUID: guid, heldBy: token, tempURL: tempURL) else {
             return
         }
         if let response, let failure = Self.statusFailure(for: response, enclosureURL: episode.enclosureURL) {
@@ -64,6 +50,8 @@ extension DownloadManager {
             try checkCancellation(of: guid, heldBy: token)
             try store.prepareEpisodesDirectory()
             let destination = try store.moveFile(at: tempURL, toRelativeFilename: filename)
+            let attempt = DiagnosticsAttemptID(token: token)
+            record(.downloadFileMoved(guid: DiagnosticsGUID(guid), attempt: attempt))
 
             // the measured duration is authoritative but optional: a file the
             // asset reader cannot make sense of leaves `assetDuration` alone,
@@ -89,6 +77,7 @@ extension DownloadManager {
                 episode.assetDuration = measured
             }
             try context.save()
+            record(.downloadFinished(guid: DiagnosticsGUID(guid), attempt: attempt))
         } catch {
             // the model must not disagree with the disk: put the fields back,
             // and take the file we just placed with them — its name is a fresh
@@ -108,6 +97,41 @@ extension DownloadManager {
         if let previousFilename, previousFilename != filename {
             try? store.removeFile(forRelativeFilename: previousFilename)
         }
+    }
+
+    /// The episode this outcome belongs to, or `nil` when there is none.
+    ///
+    /// Owns the two exits that happen before anything is written, because both
+    /// have to let go of the delivered file: the claimed temporary file is ours
+    /// from the moment the transport answers, and neither the caller's `catch`
+    /// nor its epilogue would deal with it — a whole episode referenced by
+    /// nothing would sit in `tmp` until the system purged it.
+    ///
+    /// The `nil` exit additionally records the discard. It returns *normally*,
+    /// so the caller's epilogue takes the same path a success does and writes no
+    /// terminal record on its behalf: the log would show the request, its first
+    /// byte and its deciles, and then stop, which is exactly the silence the
+    /// file exists to remove.
+    private func episodeToRecord(
+        forGUID guid: String, heldBy token: UUID, tempURL: URL
+    ) throws -> Episode? {
+        let found: Episode?
+        do {
+            found = try episode(forGUID: guid)
+        } catch {
+            try? FileManager.default.removeItem(at: tempURL)
+            throw error
+        }
+        guard let found else {
+            Self.logger.notice("finished download for an unknown guid; discarding the file")
+            try? FileManager.default.removeItem(at: tempURL)
+            record(
+                .downloadDiscarded(
+                    guid: DiagnosticsGUID(guid), attempt: DiagnosticsAttemptID(token: token),
+                    reason: .episodeMissing))
+            return nil
+        }
+        return found
     }
 
     /// The episode with this guid — the store's uniqueness scope.
