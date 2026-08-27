@@ -65,21 +65,40 @@ struct ActiveDownloadRow<Action: View>: View {
 /// The size arrives measured, from the scan that already walked the files, and
 /// is absent when that scan could not measure it — this row never reads the
 /// file system itself.
-struct DownloadedEpisodeRow: View {
+///
+/// Its indicator is supplied by the screen rather than built here, for the same
+/// reason the swipe action beside it is: this row is listed on file presence
+/// alone, so an episode being re-downloaded appears here *and* in Active
+/// Transfers, and a hard-wired delete would answer that row differently from the
+/// swipe action on it — the delete-under-a-running-move race
+/// `downloadAction(for:)` exists to forbid. The screen asks the shared policy
+/// once and hands the answer down.
+struct DownloadedEpisodeRow<Indicator: View>: View {
     let episode: Episode
     let byteCount: Int?
+    let indicator: Indicator
+
+    init(episode: Episode, byteCount: Int?, @ViewBuilder indicator: () -> Indicator) {
+        self.episode = episode
+        self.byteCount = byteCount
+        self.indicator = indicator()
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(episode.title)
-                .font(.headline)
-                .lineLimit(3)
-            Text(
-                episodeSubtitle(
-                    publishedAt: episode.publishedAt, duration: episode.duration, byteCount: byteCount)
-            )
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(episode.title)
+                    .font(.headline)
+                    .lineLimit(3)
+                Text(
+                    episodeSubtitle(
+                        publishedAt: episode.publishedAt, duration: episode.duration, byteCount: byteCount)
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            indicator
         }
     }
 }

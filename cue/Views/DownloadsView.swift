@@ -21,6 +21,8 @@ struct DownloadsView: View {
     @State private var storageErrorMessage: String?
     @State private var deleteErrorMessage: String?
     @State private var transferErrorMessage: String?
+    @State private var pendingDeletion: PendingDownloadDeletion?
+    @State private var pendingFailure: PendingDownloadFailure?
 
     private let store = EpisodeStore()
 
@@ -73,7 +75,8 @@ struct DownloadsView: View {
                 Section("Active Transfers") {
                     ForEach(activeTransfers) { transfer in
                         ActiveDownloadRow(transfer: transfer) {
-                            transferButton(for: transfer)
+                            downloadIndicator(
+                                for: transfer.episode, state: transfer.rowState, byteCount: nil)
                         }
                         .swipeActions(edge: .trailing) { transferButton(for: transfer) }
                         .contextMenu { transferButton(for: transfer) }
@@ -84,9 +87,14 @@ struct DownloadsView: View {
             ForEach(groups) { group in
                 Section {
                     ForEach(group.episodes) { item in
-                        DownloadedEpisodeRow(episode: item.episode, byteCount: item.byteCount)
-                            .swipeActions(edge: .trailing) { fileButton(for: item.episode) }
-                            .contextMenu { fileButton(for: item.episode) }
+                        DownloadedEpisodeRow(episode: item.episode, byteCount: item.byteCount) {
+                            downloadIndicator(
+                                for: item.episode,
+                                state: fileRowState(for: item.episode),
+                                byteCount: item.byteCount)
+                        }
+                        .swipeActions(edge: .trailing) { fileButton(for: item.episode) }
+                        .contextMenu { fileButton(for: item.episode) }
                     }
                 } header: {
                     Text(group.title)
@@ -121,6 +129,97 @@ struct DownloadsView: View {
         .errorAlert("Could Not Read Downloads", $storageErrorMessage)
         .errorAlert("Could Not Delete", $deleteErrorMessage)
         .errorAlert("Download Failed", $transferErrorMessage)
+        .deleteDownloadConfirmation($pendingDeletion) { guid in
+            episode(withGUID: guid).map { delete($0) }
+        }
+        .downloadFailureAlert($pendingFailure) { guid in
+            episode(withGUID: guid).map { retry($0) }
+        }
+    }
+
+    /// The row a confirmation was raised on, resolved against the query already
+    /// backing this screen.
+    private func episode(withGUID guid: String) -> Episode? {
+        episodes.first { $0.guid == guid }
+    }
+
+    /// Both sections' visible indicator, routed through the *tap* policy.
+    ///
+    /// Written once for the Active Transfers row and the completed row rather
+    /// than twice: the two sections can show the same episode at the same
+    /// moment — a re-download is listed above on its transfer and below on the
+    /// file it still has — and an indicator that answered that row on its own
+    /// would offer an immediate delete under the running move.
+    ///
+    /// Not `downloadAction(for:)`: that maps a failed transfer to Retry, which
+    /// is right for the labelled swipe action beside it and wrong for a tap
+    /// target — the indicator shows the failure, and Retry is one explicit
+    /// button further in.
+    @ViewBuilder
+    private func downloadIndicator(
+        for episode: Episode, state: EpisodeDownloadState, byteCount: Int?
+    ) -> some View {
+        Button {
+            switch downloadIndicatorActivation(for: state) {
+            case .cancel:
+                Task { await downloads.cancel(episode) }
+            case .showFailure:
+                if case .failed(let message) = state {
+                    pendingFailure = PendingDownloadFailure(id: episode.guid, message: message)
+                }
+            case .download:
+                retry(episode)
+            case .confirmDelete:
+                confirmDelete(episode, byteCount: byteCount)
+            }
+        } label: {
+            transferIndicatorImage(for: state)
+                .frame(minWidth: downloadIndicatorMinimumTapTarget, minHeight: downloadIndicatorMinimumTapTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .downloadIndicatorLabels(state)
+    }
+
+    /// The completed row's state: its file, and any transfer running over it.
+    ///
+    /// The same expression `fileButton(for:)` uses, so the row's tap target and
+    /// its swipe action cannot disagree about what the row is.
+    private func fileRowState(for episode: Episode) -> EpisodeDownloadState {
+        episodeDownloadState(localFilename: episode.localFilename, transfer: downloads.state(for: episode))
+    }
+
+    @ViewBuilder
+    private func transferIndicatorImage(for state: EpisodeDownloadState) -> some View {
+        switch state {
+        case .downloading:
+            Image(systemName: "xmark.circle")
+                .foregroundStyle(.secondary)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+        case .downloaded:
+            Image(systemName: "arrow.down.circle.fill")
+                .foregroundStyle(.secondary)
+        case .notDownloaded:
+            Image(systemName: "arrow.down.circle")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Raises the confirmation for a tap-triggered delete.
+    ///
+    /// The size the scan already measured is reused when there is one; a row it
+    /// could not measure asks the store on demand rather than claiming a size,
+    /// and a storage failure there is reported instead of swallowed.
+    private func confirmDelete(_ episode: Episode, byteCount: Int?) {
+        do {
+            let size = try byteCount ?? episode.fileSize(in: store)
+            let message = deleteDownloadConfirmationMessage(episodeTitle: episode.title, byteCount: size)
+            pendingDeletion = PendingDownloadDeletion(id: episode.guid, message: message)
+        } catch {
+            deleteErrorMessage = downloadErrorMessage(for: error)
+        }
     }
 
     /// The active row's one transfer action, shared by its visible button,
@@ -160,9 +259,7 @@ struct DownloadsView: View {
     /// downloaded moments after the user removed it).
     @ViewBuilder
     private func fileButton(for episode: Episode) -> some View {
-        let state = episodeDownloadState(
-            localFilename: episode.localFilename, transfer: downloads.state(for: episode))
-        switch downloadAction(for: state) {
+        switch downloadAction(for: fileRowState(for: episode)) {
         case .delete:
             Button(role: .destructive) {
                 delete(episode)
