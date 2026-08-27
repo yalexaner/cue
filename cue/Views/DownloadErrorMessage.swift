@@ -27,8 +27,8 @@ func downloadErrorMessage(for error: Error) -> String? {
         return message(for: failure)
     case let failure as EpisodeStore.Failure:
         return message(for: failure)
-    case is URLError:
-        return "The download could not reach the server. Check your connection and try again."
+    case let error as URLError:
+        return message(for: error)
     case is CocoaError:
         // this mapper also answers the Downloads screen's disk scan and its
         // delete, so the sentence has to fit a file that could not be read or
@@ -39,6 +39,34 @@ func downloadErrorMessage(for error: Error) -> String? {
         // a pre-signed enclosure credential. Unknown categories therefore get
         // a fixed sentence instead of a pass-through description.
         return "The download failed. Please try again."
+    }
+}
+
+/// The four things a `URLError` is actually telling the user.
+///
+/// Answering every one of them with "could not reach the server" is what made
+/// the first device session undiagnosable: a transfer that timed out at 100%, a
+/// connection dropped mid-file and a file that could not be written to storage
+/// all read as the same sentence, so neither the owner nor an agent could say
+/// which had happened. The categories below are the ones that change what a
+/// person does next — wait and retry, check the network, or free up space —
+/// and anything outside them keeps the original fixed sentence rather than
+/// inventing a guess.
+///
+/// `localizedDescription` is never passed through: `URLError` carries its
+/// failing URL, and on a private feed that URL is the credential (spec §6).
+private func message(for error: URLError) -> String {
+    switch error.code {
+    case .timedOut:
+        return "The download timed out. The server stopped answering — try again."
+    case .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost, .cannotFindHost,
+        .dnsLookupFailed, .internationalRoamingOff, .dataNotAllowed, .secureConnectionFailed:
+        return "The connection to the server was lost. Check your connection and try again."
+    case .cannotWriteToFile, .cannotMoveFile, .cannotCreateFile, .cannotRemoveFile, .cannotOpenFile,
+        .cannotCloseFile:
+        return "The download could not be saved to storage. Check available storage and try again."
+    default:
+        return "The download could not reach the server. Check your connection and try again."
     }
 }
 

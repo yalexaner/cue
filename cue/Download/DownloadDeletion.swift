@@ -71,5 +71,11 @@ extension DownloadManager {
             try? context.save()
             throw error
         }
+
+        // after the removal, never before it: the `catch` above puts the columns
+        // and the state back, so a record written ahead of the removal asserts a
+        // deletion that was rolled back — in a log whose whole purpose is
+        // settling what actually happened
+        record(.downloadDeleted(guid: DiagnosticsGUID(episode.guid)))
     }
 }

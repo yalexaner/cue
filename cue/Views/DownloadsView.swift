@@ -102,6 +102,9 @@ struct DownloadsView: View {
             }
         }
         .navigationTitle("Downloads")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) { DiagnosticsExportButton() }
+        }
         .overlay {
             // only when the scan actually succeeded and found nothing: an empty
             // screen must never be how a storage failure looks

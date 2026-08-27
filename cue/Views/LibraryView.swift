@@ -9,6 +9,7 @@ import SwiftUI
 /// cheapest way to keep SwiftData writes ordered.
 struct LibraryView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.diagnostics) private var diagnostics
     @Query(sort: \Podcast.addedAt, order: .forward) private var podcasts: [Podcast]
 
     @State private var isPresentingAddFeed = false
@@ -51,7 +52,8 @@ struct LibraryView: View {
     ///
     /// The sweep itself is `refreshAll(_:using:)`, which is plain and tested.
     private func refreshEverySubscription() async {
-        let error = await refreshAll(podcasts, using: FeedService(context: context))
+        let service = FeedService(context: context, diagnostics: diagnostics)
+        let error = await refreshAll(podcasts, using: service)
         refreshErrorMessage = error.map(feedErrorMessage(for:))
     }
 }

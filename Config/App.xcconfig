@@ -1,9 +1,11 @@
 // app-target settings; layered on top of the project-level Debug/Release configs
 PRODUCT_BUNDLE_IDENTIFIER = dev.yachmenev.cue
 // partial plist carrying only what INFOPLIST_KEY_* settings cannot express
-// (UIBackgroundModes and NSAppTransportSecurity have no such setting); generated keys are merged into it
+// (UIBackgroundModes, NSAppTransportSecurity and UIFileSharingEnabled have no such setting); generated keys are merged into it
 INFOPLIST_FILE = cue/Support/Info.plist
 INFOPLIST_KEY_CFBundleDisplayName = cue
+// the exported diagnostics file is reachable in place from Files, beside iTunes file sharing
+INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES
 INFOPLIST_KEY_UILaunchScreen_Generation = YES
 INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait
 LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/Frameworks

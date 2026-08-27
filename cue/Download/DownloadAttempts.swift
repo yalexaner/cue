@@ -32,6 +32,9 @@ struct DownloadAttempt: Equatable {
     /// describes. The yield is single-use.
     var isFinishing = false
     var progress = DownloadProgress.waiting
+    /// Diagnostics bookkeeping, per attempt so retirement drops it.
+    var hasLoggedFirstByte = false
+    var loggedDecile: Int?
 }
 
 extension DownloadManager {
@@ -75,6 +78,31 @@ extension DownloadManager {
         guard case .downloading(let published)? = states[guid] else { return }
         guard progress.bytesWritten >= attempt.progress.bytesWritten else { return }
         attempt.progress = progress
+        // Deliberately scoped to exactly the reports accepted above, for
+        // exactly this registered live attempt — not to "every byte". Progress
+        // arrives on separate unstructured main-actor tasks, so a report can
+        // land after the attempt retires and be rejected here; one arriving
+        // before the handler is installed is discarded by the downloader, and
+        // one arriving before `adopt` creates the attempt is rejected by the
+        // guard above. On the relaunch path an adopted transfer's early
+        // progress is therefore not logged at all. These are accepted gaps:
+        // buffering around them would add a second delivery queue. Terminal
+        // records are not best-effort; these are.
+        let loggedGUID = DiagnosticsGUID(guid)
+        let loggedAttempt = DiagnosticsAttemptID(token: attempt.token)
+        if !attempt.hasLoggedFirstByte, progress.bytesWritten > 0 {
+            attempt.hasLoggedFirstByte = true
+            record(
+                .downloadFirstByte(
+                    guid: loggedGUID, attempt: loggedAttempt, bytes: progress.bytesWritten))
+        }
+        if let decile = crossedDecile(for: progress, lastLogged: attempt.loggedDecile) {
+            attempt.loggedDecile = decile
+            record(
+                .downloadDecile(
+                    guid: loggedGUID, attempt: loggedAttempt, decile: decile,
+                    bytes: progress.bytesWritten))
+        }
         attempts[guid] = attempt
         guard progress.rendersDifferently(from: published) else { return }
         states[guid] = .downloading(progress)

@@ -11,6 +11,7 @@ import SwiftUI
 /// the error is still on screen and still editable, so the fix is one edit away.
 struct AddFeedView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.diagnostics) private var diagnostics
     @Environment(\.dismiss) private var dismiss
 
     @State private var urlString = ""
@@ -74,7 +75,8 @@ struct AddFeedView: View {
         defer { isAdding = false }
 
         do {
-            try await FeedService(context: context).add(urlString: trimmedURLString)
+            try await FeedService(context: context, diagnostics: diagnostics)
+                .add(urlString: trimmedURLString)
             dismiss()
         } catch {
             // nil when Cancel got here first: the sheet is already dismissed and
