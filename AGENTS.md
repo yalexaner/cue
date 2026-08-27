@@ -30,8 +30,18 @@ which is a project-wide decision, not a per-step workaround.)
 `just lint` runs `--strict`, so SwiftLint's default 400-line `file_length`
 *warning* fails the build. `.swiftlint.yml` overrides `type_body_length` but not
 `file_length`: split a long file or suite by topic — `DownloadPolicy.swift`,
-`DownloadManagerRelaunchTests.swift`, `DownloadManagerDurationTests.swift` are
-all splits, not designs — rather than raising the limit.
+`DownloadPacing.swift`, `DownloadPhases.swift`, `DownloadQueue.swift`,
+`DownloadDeletion.swift`, `BackgroundDownloaderRouting.swift`,
+`DownloadManagerRelaunchTests.swift`, `DownloadManagerDurationTests.swift`,
+`DownloadDiagnostics.swift`, `DownloadRows.swift`, `DiagnosticsExportButton.swift`,
+`DownloadManagerAttemptIdentityTests.swift`, `DownloadManagerStallTests.swift`
+`DownloadCancellationDiagnosticsTests.swift`, `DownloadDeletionTests.swift`,
+`FeedDiagnostics.swift`
+and `DownloadManagerThrottleTests.swift` are all splits, not designs — rather than raising the limit. Do not carry a
+remembered line count for any of them: the numbers move every step, and an
+earlier draft of this file was cited as claiming the relaunch suite sits at
+exactly 400 lines when it does not (363 at the time of writing). Measure with
+`wc -l` before deciding a file has room.
 
 ## Project structure
 
@@ -87,6 +97,12 @@ These are not preferences. Each one is a bug being designed out.
   SwiftData `#Predicate`, so the Downloads view filters in memory. Callers must
   propagate the error: the reconciliation sweep clears download state on a
   `false`, so treating "cannot tell" as "absent" would wipe the library.
+  `Episode.fileSize(in:)` is the same shape and the same rule: `nil` means
+  positively no file (no stored filename, or one the store confirmed absent),
+  and every other storage failure propagates — reporting an unmeasurable file as
+  zero bytes tells the user a real download costs nothing. Because the read
+  throws, the size behind a delete confirmation is measured on the screen's
+  error path, never inside a view builder that would have to swallow it.
 - **Refresh fetches before it writes.** `#Unique` makes a conflicting
   `context.insert` an upsert that overwrites *every* scalar with the new
   instance's value, including defaults — it clears `localFilename`,
@@ -182,19 +198,50 @@ Two more that follow from the same design and are easy to break by accident:
   initialisation is not atomic and which the app delegate and the transport can
   reach at the same moment). Neither is a precedent for anything else — every
   other service stays a cheap struct.
-- **Download progress is three-state, in-memory and attempt-guarded.**
-  `DownloadProgress` distinguishes `.waiting`, `.indeterminate(bytesWritten:)`
-  and `.fraction(bytesWritten:value:)`; never collapse those into `Double?`.
-  Progress and failure state stay out of SwiftData. A progress callback applies
+- **Download progress is a six-phase vocabulary, in-memory and attempt-guarded.**
+  `DownloadProgress` distinguishes `.queued(position:)`, `.connecting`,
+  `.indeterminate(bytesWritten:bytesPerSecond:)`,
+  `.fraction(bytesWritten:expectedBytes:bytesPerSecond:)`,
+  `.stalled(bytesWritten:expectedBytes:)` and `.finalizing(bytesWritten:)`;
+  never collapse those into `Double?`, and never merge queued with connecting —
+  telling a queued transfer from a connecting one is the point. `.finalizing`
+  covers the window between the last byte and the file landing in `Episodes/`,
+  which is where a real device failure was observed; rendering it as an ordinary
+  100 % is the confusion it exists to remove. Progress and failure state stay out
+  of SwiftData. A progress callback applies
   only to the registered live attempt for its guid while that attempt remains
   `.downloading`; delayed callbacks from retired or older attempts are dropped,
   and lower byte counts never replace newer progress. The attempt records every
   accepted report, but the observed `states` map is written only when the row
-  would render differently (`DownloadProgress.rendersDifferently(from:)`, whole
-  percent for `.fraction`): observation invalidates on assignment rather than on
+  would render differently (`DownloadProgress.rendersDifferently(from:)`,
+  compared over every displayed field — phase, queue position, byte count,
+  expected total, whole percent and whole-kilobyte rate bucket; the flood a
+  coarser comparison used to hold off is held off by the throttle instead):
+  observation invalidates on assignment rather than on
   inequality, and both download screens read that map, so publishing every byte
   callback costs a library-wide body pass tens of times a second. Throttling
   there is deliberate — do not "restore" a write per callback.
+- **The throttle is trailing, generation-guarded and lifecycle-exempt.**
+  Repeated byte and rate publications are limited to one per
+  `DownloadPacing.publishInterval` with at most one pending trailing
+  publication per attempt, so a transfer cannot end on a stale row. *Lifecycle*
+  transitions — queued to connecting, a queue reindex, stalled, finalizing and
+  every terminal state — bypass the throttle entirely and invalidate any pending
+  byte publication: a change the user caused must not wait for the next
+  callback, and a callback must not undo it. Before a deferred publication
+  writes it must match its own publication generation *and* the guid *and* the
+  attempt token *and* an actively moving phase — "still downloading" is not
+  enough, because `.stalled` and `.finalizing` are both downloading states.
+- **Stall detection and rate go through an injected `DownloadClock`, never
+  `Date` or a bare `Task.sleep`.** The attempt keeps a monotonic last-increase
+  timestamp updated only on a strict byte increase; a deadline task scoped to
+  the attempt and tagged with a generation writes `.stalled` after
+  `DownloadPacing.stallThreshold`. `now()` is monotonic uptime on purpose — the
+  deadline compares two readings taken across a suspension, and a wall-clock
+  adjustment between them would either stall a moving transfer or postpone
+  stalling forever. `TransferRateWindow` measures across a bounded trailing
+  window rather than between the last two callbacks, which can be milliseconds
+  apart. No test may sleep to exercise any of this.
 - **Download cancellation is guid-addressable but attempt-scoped.** An adopted
   background transfer has no in-process `Task`, so cancellation enumerates
   session tasks by the guid in `taskDescription`, while queued transfers are
@@ -216,7 +263,7 @@ Two more that follow from the same design and are easy to break by accident:
   contain credentials and must not reach the UI or a `.public` log entry.
 - **A relaunch delivery is never dropped, and never answered early.** iOS may
   relaunch the app *only* to hand over a finished background transfer, so:
-  `AppDelegate` — the app's one UIKit entry point, via
+  `AppDelegate` — the app's one UIKit *lifecycle* entry point, via
   `@UIApplicationDelegateAdaptor`, for
   `application(_:handleEventsForBackgroundURLSession:completionHandler:)` and
   nothing else — stores the handler and wakes the session; `CueApp.init()`
@@ -239,9 +286,11 @@ Two more that follow from the same design and are easy to break by accident:
   and answering a replaced handler inline would report "safe to suspend" while a
   finish is still running. Background transfers are carried by the
   system daemon and need no `UIBackgroundModes` entry: `UIBackgroundModes` stays
-  `audio` only. The partial plist carries exactly two keys — that one and the
-  `NSAppTransportSecurity` exception (spec §6) — because neither has an
-  `INFOPLIST_KEY_*` equivalent.
+  `audio` only. The partial plist carries exactly three keys — that one, the
+  `NSAppTransportSecurity` exception (spec §6) and `UIFileSharingEnabled` for
+  the diagnostics export — because none has an `INFOPLIST_KEY_*` equivalent.
+  `LSSupportsOpeningDocumentsInPlace` does have one, so it lives in
+  `Config/App.xcconfig` instead.
 - **The app builds its own `ModelContainer`.** `CueApp.init()` constructs it and
   passes it to `.modelContainer(container)` rather than `.modelContainer(for:)`,
   because `DownloadManager` needs `mainContext` before the scene body runs; a
@@ -255,20 +304,37 @@ Two more that follow from the same design and are easy to break by accident:
   feed sending `Cache-Control: max-age` is answered from `URLCache` and the
   refresh reports success having fetched nothing. Revalidating still honours a
   304. The request is a named function so the policy is assertable.
+  It also sets `timeoutInterval = FeedService.requestTimeout` (20 s). That is an
+  *idle* timeout — Apple restarts the clock on every byte — so it bounds a
+  silent server, never a large feed that keeps arriving; the inherited 60 s
+  default is a full minute of a spinner saying nothing. Both the policy and the
+  timeout are asserted.
 - **Fetch failures name what failed.** Non-2xx throws
   `FeedService.Failure.httpStatus(status, url)`; an unparseable or non-http
   address throws `Failure.invalidURL(string)`; a new subscription whose every
   episode is owned elsewhere throws `Failure.allEpisodesOwnedElsewhere(url)`.
   Transport errors (`URLError`, ATS rejections) and `FeedParser.Failure`
-  propagate unchanged — wrapping them hides the cause. `feedErrorMessage(for:)`
-  is the single place those map to user-facing text. Download failures map
+  propagate unchanged — wrapping them hides the cause.
+  `feedErrorMessage(for:host:)` is the single place those map to user-facing
+  text. Download failures map
   through `downloadErrorMessage(for:)` (`cue/Views/DownloadErrorMessage.swift`)
   instead — it covers `DownloadManager.Failure`, `EpisodeStore.Failure`,
-  `URLError` (reachability) and `CocoaError` (storage), answers every other
+  `CocoaError` (storage) and `URLError`, answers every other
   error with a fixed sentence rather than its description, and
   returns `String?` so cancellation cannot be reported by forgetting a `catch`,
-  the same shape as `reportableFeedErrorMessage(for:)`. The feed mapper stays
-  feed-only.
+  the same shape as `reportableFeedErrorMessage(for:host:)`. `URLError` is split into
+  the four categories that change what a person does next — timed out,
+  connection lost or unreachable, could not be saved to storage, and a fixed
+  sentence for anything else. Never collapse them back into one line: answering
+  every `URLError` with "could not reach the server" is exactly what made the
+  first device session undiagnosable. The feed mapper stays feed-only, and so
+  does the export's: `diagnosticsExportErrorMessage(for:)`
+  (`cue/Views/DiagnosticsExportErrorMessage.swift`) is a third function rather
+  than a reuse, because handed a `CocoaError` the download mapper tells the user
+  a *download* failed under an alert titled *Could Not Export Diagnostics*. It
+  is non-optional, unlike the other two — the export is one tap that either
+  produces a file or does not, so a `nil` would only let the button fail
+  silently.
 - **A feed or enclosure URL never reaches the log at `.public` privacy.** Private
   feeds are pre-signed (spec §6), so those URLs are tokens, and `os_log` renders
   an error's associated values — `DownloadManager.Failure.httpStatus(_, url)`
@@ -279,12 +345,43 @@ Two more that follow from the same design and are easy to break by accident:
   cancelled when its view goes away and `URLSession` surfaces that as
   `URLError.cancelled`; `isCancellation(_:)` (`cue/Views/FeedRefreshing.swift`)
   is the single classifier. Never pass a cancellation to
-  `feedErrorMessage(for:)` — it pops an alert on a disappearing view, and inside
-  a multi-feed sweep it becomes the reported error and masks the real one. A
-  screen running one feed catches once and calls
-  `reportableFeedErrorMessage(for:)`, which answers `nil` for cancellation, so
-  the rule cannot be forgotten a `catch` clause at a time; the sweep's own
-  version of it is `refreshAll(_:using:)`.
+  `feedErrorMessage(for:host:)` — it pops an alert on a disappearing view, and
+  inside a multi-feed sweep it becomes the reported error and masks the real
+  one. A screen running one feed catches once and calls
+  `reportableFeedErrorMessage(for:host:)`, which answers `nil` for cancellation,
+  so the rule cannot be forgotten a `catch` clause at a time; the sweep's own
+  version of it is `refreshAll(_:using:onStep:)`, which counts a cancellation as
+  neither a refresh nor a failure. A *cancelled* fetch is also not a
+  record: `FeedService` skips `feed.fetch_failed` for one, the same line
+  `recordTerminalFailure` draws on the download route — logged as a failure it
+  fills the export with error-level lines for deliberate user actions.
+- **Naming a feed in user-facing text goes through `DiagnosticsHost`, not a
+  `String`.** `feedErrorMessage(for:host:)` and
+  `reportableFeedErrorMessage(for:host:)` consult it only for errors that carry
+  no address of their own — a `URLError` says "the request timed out" and
+  nothing more, which inside a sweep over several subscriptions does not say
+  *which* feed timed out. The type is the guard: a full private-feed URL cannot
+  be passed where scheme-and-host is meant (spec §6), and `nil` is for callers
+  with no address to name. The same value travels on `FeedRefreshFailure` and
+  `FeedRefreshPhase`.
+- **A sweep reports counts, not just its first error.**
+  `refreshAll(_:using:onStep:)` returns a `FeedRefreshSummary` — refreshed,
+  failed, and a structured first failure. A screen shows
+  `feedRefreshSummaryText(refreshed:failed:)` *as well as* the alert when both
+  counts are non-zero: the alert names one dead feed and on its own reads as
+  "the refresh failed" when four other shows did update. That summary must be
+  dismissible — the library list is the navigation root, so its state lives for
+  the whole session and an undismissable banner becomes permanent chrome.
+  `onStep` is a plain closure rather than a stream because the caller is a
+  `.refreshable` body that has to stay one `await`. The status model's
+  five-second "still waiting" transition runs on the injected `DownloadClock` —
+  the seam for anything that *waits* on time, so no test sleeps. Measuring an
+  *elapsed* duration is a different job with its own source:
+  `FeedService.elapsedMilliseconds(since:)` reads `ContinuousClock` directly
+  (monotonic, so a wall-clock adjustment mid-fetch cannot log a negative
+  duration), and `DiagnosticsFileWriter` takes its own `now: () -> Date` for
+  record timestamps, which have to be wall-clock to mean anything to a reader.
+  Three sources, on purpose; do not collapse them.
 - Services that write to SwiftData are cheap `@MainActor` structs constructed at
   the call site with a `ModelContext` — same precedent as `EpisodeStore`, no
   shared instance.
@@ -324,6 +421,130 @@ Two more that follow from the same design and are easy to break by accident:
   just-inserted, never-saved model is `context.delete` on that model, not
   `rollback()` (`add`'s `allEpisodesOwnedElsewhere` path).
 
+## Diagnostics
+
+The device log exists so a failure the owner hits once can be read back by an
+agent. Everything here follows from that and from `docs/SECRETS.md`.
+
+- **The sink is injected with a no-op default.** `DiagnosticsSink` has
+  `record(_:)` and `flush()`; `NoOpDiagnosticsSink` is the default everywhere, so
+  no existing test writes to disk by accident. `DownloadManager` takes one
+  beside its transport; `FeedService` — a cheap struct built inside three views
+  and never by `CueApp` — reads it from `\.diagnostics` in the environment.
+  Production has exactly one `DiagnosticsFileWriter` so a single serial writer
+  owns the file. That is a file-coordination reason and deliberately narrower
+  than `BackgroundDownloader`'s: a second log writer is merely wrong, a second
+  background session identifier is an OS-level runtime error.
+- **Reading the log back is a separate capability.** `DiagnosticsSnapshotSource`
+  is its own protocol (`\.diagnosticsSnapshots`), not a member of the sink.
+  Widening the sink would force every conformance — the no-op included — to
+  answer a question it has no business answering, and the export screen must
+  never reach a snapshot by downcasting a sink it was handed for writing.
+- **A log field cannot be an arbitrary `String`.** Hosts and guids enter through
+  `DiagnosticsHost` and `DiagnosticsGUID`, whose only initialisers sanitise, and
+  an error reduces to `DiagnosticsErrorCode` — bridged `NSError` domain and code
+  only, never `localizedDescription`. Redaction is structural: a call site
+  *cannot* pass a full address where a host is expected. A guid is a truncated
+  SHA-256 digest of its UTF-8 bytes — never a prefix of itself (a guid is
+  feed-supplied and frequently a URL, so its leading bytes can be a credential)
+  and never Swift's `Hasher`, which is per-process randomised and would break
+  the cross-relaunch correlation the file exists for. An attempt identifier is
+  derived from the ownership token, not from the reusable task identifier.
+- **Every terminal outcome leaves a line, including the ones that are not
+  failures.** A transfer that ends without an episode to record it on — the guid
+  was unsubscribed mid-flight, or another writer in this process already owns it
+  — returns *normally*, so nothing downstream writes a terminal record on its
+  behalf, and the exported log would show the request and its deciles and then
+  stop. That silence is the exact ambiguity the file exists to remove, so those
+  paths write `download.discarded` with a `DiagnosticsDiscardReason` (a fixed
+  vocabulary, never free text) rather than nothing. The relaunch route's failed
+  episode lookup is the sharper case: it puts a *user-visible* failed row on
+  screen and never reaches `recordTerminalFailure`, so it records its own
+  `download.failed` — or `download.not_started` when the outcome arrived before
+  ownership was claimed and there is no attempt to name.
+- **The writer appends because it seeks, so a failed seek is a failed open.**
+  `FileHandle(forWritingTo:)` opens at offset 0. Swallowing `seekToEnd()` caches
+  a handle at the head of an existing log: later records overwrite earlier ones
+  and the byte cap is measured from a size the file does not have, so it can
+  reach roughly twice `byteCap` before rotating. Treat the seek as part of the
+  open and let the next record retry.
+- **Logging never throws and never fails a caller.** A write failure degrades to
+  `os_log` and is otherwise swallowed: a broken log must not turn a working
+  download into a broken one. `os_log` stays — the file is an additional sink,
+  not a replacement — and the file rather than
+  `OSLogStore(scope: .currentProcessIdentifier)` because the transfers this
+  explains often finish in a different process than the one that started them.
+- **`record(_:)` is a fence, not merely serialized.** It enqueues synchronously
+  into a lock-protected mailbox that the writer's actor drains, so a following
+  `await flush()` is guaranteed to wait behind it.
+- **The background-delivery barrier fires after logging and awaits a flush, but
+  must complete even when the flush fails.** It is an explicit one-shot invoked
+  after failure-state and log handling, never `defer`: a `defer` inside the
+  inner `do` fires *before* the outer `catch` writes the failure, which leaves
+  exactly the terminal records — failed, file moved, finished — unprotected. A
+  lost log is survivable; a never-answered UIKit handler is not.
+- **A failed rotation must not reset the size bound.** `currentSize` is zeroed
+  only when the move actually happened: telling the writer an oversized file is
+  empty grants another whole `byteCap` of growth before the next attempt, and
+  repeated failures remove the bound entirely. Keeping the size retries the
+  rotation on the next append instead, so the failure is logged once per streak
+  rather than once per record.
+- **The log lives in `Application Support/Diagnostics/`, never `Caches/`** —
+  iOS evicts caches under storage pressure. One current generation with a byte
+  cap plus one retained previous generation; the export assembles a header and
+  every generation into one replaced file, so a second export replaces the
+  first rather than growing a pile in Files.
+- **The export needs two bundle settings.** Which one lives in the partial
+  plist and which in `Config/App.xcconfig` is recorded once, with the relaunch
+  rule under Networking — do not restate the key list here, because the next
+  plist change will update one copy and leave the other stale.
+
+## User-facing behaviour
+
+- **The indicator's activation policy is a separate question from
+  `downloadAction(for:)`.** `downloadIndicatorActivation(for:)` answers what a
+  *tap* does; `downloadAction(for:)` answers what a chosen swipe action or
+  context-menu item does. They differ in exactly two places, on purpose. A
+  failed row is `.showFailure` for a tap and `.download` for a menu item spelled
+  "Retry Download": an unlabelled triangle must not silently start a transfer
+  over a connection that just failed, so retry is one explicit button further
+  in. A downloaded row is `.confirmDelete` for a tap and immediate for a swipe:
+  the swipe gesture is itself the confirmation, a tap is not. Both screens use
+  `downloadIndicatorMinimumTapTarget` so the same control cannot get two
+  different tap targets.
+- **Every download indicator is built from a row state, never hard-wired.** No
+  control may assume what its row is from the section it sits in. The Downloads
+  tab's completed list is built on file presence alone, so a re-download appears
+  there *and* in Active Transfers at the same time; an indicator wired straight
+  to delete because "this is the downloaded section" offers an immediate removal
+  under the running move, which clears the columns and the file just before the
+  finish writes the new filename back over them — the episode returns seconds
+  after the user removed it. Both of that row's controls resolve it through
+  `episodeDownloadState(localFilename:transfer:)` first (`fileRowState(for:)`),
+  so the tap target and the swipe action cannot disagree about what the row is,
+  and `DownloadedEpisodeRow` takes its indicator from the screen rather than
+  building one. Pinned by
+  `aStoredFileBeingReDownloadedCancelsRatherThanDeletes`.
+- **Row tap itself stays inert.** Step 5 claims it for playback.
+- **The clipboard is detected, never blind-read.**
+  `UIPasteboard.detectedPatterns(for:)` asks what *shape* the clipboard holds
+  and does not prompt; reading its contents may, so the read happens only inside
+  the Paste button's own action. A detection that fails offers nothing rather
+  than falling back to a read the user did not ask for, the offer is withdrawn
+  once the field has text (`shouldOfferFeedPaste(detection:fieldText:)`), and
+  the value is revalidated through `pastedFeedAddress(fromClipboard:)` on the
+  way in because the clipboard can change between the offer and the tap. A
+  pasted address goes through the same normalisation a typed one does — the
+  inner token of a private feed is never rewritten (spec §6).
+- **`DiagnosticsShareSheet` is the view tree's only `UIViewControllerRepresentable`.**
+  SwiftUI has no share sheet that takes a file URL and stays a toolbar item, so
+  the export wraps `UIActivityViewController`. It is not a precedent: reach for
+  a representable only where SwiftUI has no equivalent at all.
+- **cue is English-only for now.** New strings are literals and no localisation
+  machinery is introduced. Wordings avoid constructs that would need a formatter
+  — the queue position is worded without an ordinal — so adding localisation
+  later is a translation job, not a rewrite. This is a decision, not drift.
+
 ## Testing
 
 - Swift Testing (`@Test`, `#expect`), not XCTest. No `XCTestCase` subclasses,
@@ -335,7 +556,12 @@ Two more that follow from the same design and are easy to break by accident:
   (`cue/Views/EpisodeListFormatting.swift`, `cue/Views/FeedErrorMessage.swift`,
   `cue/Views/FeedRefreshing.swift`, `cue/Views/FeedAddress.swift`,
   `cue/Views/DownloadListFormatting.swift`, `cue/Views/DownloadErrorMessage.swift`,
-  `cue/Views/ActiveDownloadFormatting.swift`)
+  `cue/Views/ActiveDownloadFormatting.swift`,
+  `cue/Views/DownloadIndicatorActivation.swift`, `cue/Views/FeedPasteOffer.swift`,
+  `cue/Views/DiagnosticsExportErrorMessage.swift`, and
+  `cue/Views/FeedRefreshStatus.swift` — the one exception, a small `@Observable`
+  model rather than a bare function, because the five-second "still waiting"
+  transition is time-driven and nothing arrives to trigger it)
   and tested directly — including the policy the two download screens must not
   answer differently: a transfer in flight outranks a stored file, and a row
   mid-transfer offers Cancel rather than Delete. The Active Transfers section
@@ -364,6 +590,25 @@ Two more that follow from the same design and are easy to break by accident:
   same file precisely so the cases the stub must never produce by accident can
   still be produced on purpose. A suite-local factory over those shared pieces
   is fine; a second copy of the stub or the loader is not.
+- The same one-double-per-seam rule covers the other injected seams:
+  `RecordingDiagnosticsSink` (`cueTests/RecordingDiagnosticsSink.swift`) for
+  `DiagnosticsSink` — its `flushSilentlyFails` models the only failure a sink
+  can have, since `flush()` cannot throw, and it must stay observable
+  (`flushAttemptCount` counts the asks, `flushCount` only the drains) or a test
+  named for "a flush that achieves nothing" silently exercises the working path
+  — and `ManualDownloadClock` (`cueTests/ManualDownloadClock.swift`) for
+  `DownloadClock`, driven with `advance(by:)` and `wake()`. No test may sleep
+  for a 30 s stall deadline or a 1 s throttle interval. Shared setup for the
+  split progress suites lives in `cueTests/DownloadProgressSupport.swift`.
+- **A test that only calls a timed body has not tested the task that calls it.**
+  `flushPendingProgress` and `markStalled` are separated so they are assertable
+  without a sleep, but a suite that *only* calls them directly covers neither the
+  arming nor the firing: delete the call inside either armed `Task` and every
+  such test still passes while no row ever updates and no transfer ever stalls.
+  At least one case per timed path goes through the public entry point and
+  releases the clock — `wake(_:until:)` in `cueTests/YieldUntil.swift`, which
+  retries because an armed `Task` has not necessarily reached its `sleep` when
+  a bare `wake()` arrives.
 - Assert persistence through a second `ModelContext(container)`. The context
   that did the inserting cannot tell a committed store from pending changes —
   and for the same reason, a test about an insert being *cancelled* must assert
