@@ -249,6 +249,34 @@ struct EpisodeSubtitleTests {
     @Test func neitherPartPresentIsAnEmptyLine() {
         #expect(episodeSubtitle(publishedAt: nil, duration: nil).isEmpty)
     }
+
+    /// The Downloads row's third part: what the file occupies, in the same
+    /// file-style units the group footer uses.
+    @Test func aMeasuredSizeIsTheThirdPart() {
+        let subtitle = episodeSubtitle(publishedAt: date(1), duration: 90, byteCount: 5_000_000)
+
+        #expect(subtitle.hasSuffix(diskUsageText(5_000_000)))
+        #expect(subtitle.components(separatedBy: " · ").count == 3)
+    }
+
+    /// The size stands alone when the feed supplied nothing else — and still
+    /// without a leading separator.
+    @Test func aSizeAloneIsTheWholeLine() {
+        #expect(episodeSubtitle(publishedAt: nil, duration: nil, byteCount: 1_000) == diskUsageText(1_000))
+    }
+
+    /// A size that could not be measured, or that measured as nothing, shows
+    /// nothing at all — never a confident "Zero KB" for a real download.
+    @Test func anUnmeasuredOrEmptySizeShowsNothing() {
+        #expect(episodeSubtitle(publishedAt: nil, duration: 90, byteCount: nil) == "1:30")
+        #expect(episodeSubtitle(publishedAt: nil, duration: 90, byteCount: 0) == "1:30")
+        #expect(episodeSubtitle(publishedAt: nil, duration: 90, byteCount: -1) == "1:30")
+    }
+
+    /// The screens that never measure keep their two-part line unchanged.
+    @Test func theSizeIsAbsentByDefault() {
+        #expect(episodeSubtitle(publishedAt: nil, duration: 90) == "1:30")
+    }
 }
 
 struct FeedAddressTests {

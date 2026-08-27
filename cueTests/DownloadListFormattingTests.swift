@@ -60,7 +60,7 @@ struct DownloadGroupingTests {
 
         let groups = downloadGroups([old, new], sizes: [:])
 
-        #expect(groups[0].episodes.map(\.guid) == ["new", "old"])
+        #expect(groups[0].episodes.map(\.episode.guid) == ["new", "old"])
     }
 
     /// Groups are ordered by title so two rebuilds of the same library agree.
@@ -101,7 +101,7 @@ struct DownloadGroupingTests {
         let groups = downloadGroups([orphan], sizes: [:])
 
         #expect(groups.count == 1)
-        #expect(groups[0].episodes.map(\.guid) == ["orphan"])
+        #expect(groups[0].episodes.map(\.episode.guid) == ["orphan"])
         #expect(groups[0].id.isEmpty)
         #expect(groups[0].title == "Unknown Podcast")
     }
@@ -132,6 +132,34 @@ struct DownloadGroupingTests {
 
         #expect(groups[0].byteCount == 42)
         #expect(groups[0].episodes.count == 2)
+    }
+
+    /// Each row carries its own measured size, not just the group total: the
+    /// Downloads scan is the only place that measures, and the row is where the
+    /// user reads what one episode costs.
+    @Test func eachEpisodeCarriesItsOwnMeasuredSize() throws {
+        let context = try makeContext()
+        let podcast = makePodcast(context, feedURL: testFeedURL, title: "Show")
+        let old = makeEpisode(context, guid: "old", podcast: podcast, publishedAt: date(1))
+        let new = makeEpisode(context, guid: "new", podcast: podcast, publishedAt: date(3))
+
+        let groups = downloadGroups([old, new], sizes: ["old": 1_000, "new": 2_000])
+
+        #expect(groups[0].episodes.map(\.byteCount) == [2_000, 1_000])
+        #expect(groups[0].episodes.map(\.id) == ["new", "old"])
+    }
+
+    /// An unmeasured episode reaches its row with no size rather than with a
+    /// zero it would then render as "Zero KB".
+    @Test func anUnmeasuredEpisodeReachesItsRowWithNoSize() throws {
+        let context = try makeContext()
+        let podcast = makePodcast(context, feedURL: testFeedURL, title: "Show")
+        let measured = makeEpisode(context, guid: "measured", podcast: podcast, publishedAt: date(2))
+        let unmeasured = makeEpisode(context, guid: "unmeasured", podcast: podcast, publishedAt: date(1))
+
+        let groups = downloadGroups([measured, unmeasured], sizes: ["measured": 42])
+
+        #expect(groups[0].episodes.map(\.byteCount) == [42, nil])
     }
 }
 

@@ -53,13 +53,22 @@ func episodeDurationText(_ duration: TimeInterval?) -> String? {
     return String(format: "%d:%02d", minutes, seconds)
 }
 
-/// An episode row's second line: date and duration, separated by a middle dot.
+/// An episode row's second line: date, duration and file size, separated by
+/// middle dots.
 ///
-/// Either half may be absent — an undated episode and a feed with no usable
-/// `itunes:duration` are both ordinary — so the separator appears only between
-/// two present values, and a row with neither shows an empty line rather than a
-/// stray dot or an invented placeholder.
-func episodeSubtitle(publishedAt: Date?, duration: TimeInterval?) -> String {
+/// Any part may be absent — an undated episode, a feed with no usable
+/// `itunes:duration`, and a row whose size was never measured are all
+/// ordinary — so a separator appears only between two present values, and a row
+/// with none shows an empty line rather than a stray dot or an invented
+/// placeholder.
+///
+/// `byteCount` is optional and defaults to absent because only the Downloads
+/// screen measures sizes: it is the one screen that already walks the files
+/// (spec §7), and a size it could not measure must read as no size at all
+/// rather than as a confident "Zero KB". A non-positive count is treated the
+/// same way — a zero-byte episode file is a broken file, not information.
+func episodeSubtitle(publishedAt: Date?, duration: TimeInterval?, byteCount: Int? = nil) -> String {
     let date = publishedAt?.formatted(date: .abbreviated, time: .omitted)
-    return [date, episodeDurationText(duration)].compactMap { $0 }.joined(separator: " · ")
+    let size = byteCount.flatMap { $0 > 0 ? diskUsageText($0) : nil }
+    return [date, episodeDurationText(duration), size].compactMap { $0 }.joined(separator: " · ")
 }

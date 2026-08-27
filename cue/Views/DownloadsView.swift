@@ -83,10 +83,10 @@ struct DownloadsView: View {
 
             ForEach(groups) { group in
                 Section {
-                    ForEach(group.episodes) { episode in
-                        DownloadedEpisodeRow(episode: episode)
-                            .swipeActions(edge: .trailing) { fileButton(for: episode) }
-                            .contextMenu { fileButton(for: episode) }
+                    ForEach(group.episodes) { item in
+                        DownloadedEpisodeRow(episode: item.episode, byteCount: item.byteCount)
+                            .swipeActions(edge: .trailing) { fileButton(for: item.episode) }
+                            .contextMenu { fileButton(for: item.episode) }
                     }
                 } header: {
                     Text(group.title)

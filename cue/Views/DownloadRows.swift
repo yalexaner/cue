@@ -61,17 +61,25 @@ struct ActiveDownloadRow<Action: View>: View {
 }
 
 /// One Downloads row: the episode, its show's ordering, and its own size line.
+///
+/// The size arrives measured, from the scan that already walked the files, and
+/// is absent when that scan could not measure it — this row never reads the
+/// file system itself.
 struct DownloadedEpisodeRow: View {
     let episode: Episode
+    let byteCount: Int?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(episode.title)
                 .font(.headline)
                 .lineLimit(3)
-            Text(episodeSubtitle(publishedAt: episode.publishedAt, duration: episode.duration))
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            Text(
+                episodeSubtitle(
+                    publishedAt: episode.publishedAt, duration: episode.duration, byteCount: byteCount)
+            )
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
         }
     }
 }
