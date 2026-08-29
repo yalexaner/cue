@@ -126,8 +126,12 @@ final class DownloadManager {
     /// and injected like every other seam rather than left settable, so no
     /// holder of the shared manager can redirect episode resolution mid-transfer.
     let episodeLookup: ((String) throws -> Episode?)?
+    /// Internal, like `context` and `store`: the finish, relaunch and deletion
+    /// routes all record, and they live in extensions in other files. Injected
+    /// with a no-op default, so no existing test writes to disk (decision 6).
+    let diagnostics: DiagnosticsSink
     private let transport: FileTransport
-    private let deliveryBarrier: DeliveryBarrier
+    let deliveryBarrier: DeliveryBarrier
     private let cancellationRequest: CancellationRequest
 
     /// The transfer slot and its queued waiters. Internal only because the
@@ -135,18 +139,33 @@ final class DownloadManager {
     var isTransferring = false
     var waiting: [TransferWaiter] = []
 
+    /// The armed stall deadline per guid, and the one deferred byte
+    /// publication per guid. Internal because the phase machinery lives in
+    /// `DownloadPhases.swift`; kept off the attempt record so that record stays
+    /// a comparable value.
+    var stallDeadlines: [String: Task<Void, Never>] = [:]
+    var pendingPublications: [String: Task<Void, Never>] = [:]
+
+    /// Time, behind a seam, so stall deadlines, the throttle and the rate
+    /// window are all exercised without a test ever sleeping.
+    let clock: DownloadClock
+
     init(
         context: ModelContext, store: EpisodeStore = EpisodeStore(),
         transport: @escaping FileTransport, deliveryBarrier: @escaping DeliveryBarrier = {},
         cancellationRequest: @escaping CancellationRequest = { _, _ in },
-        episodeLookup: ((String) throws -> Episode?)? = nil
+        episodeLookup: ((String) throws -> Episode?)? = nil,
+        diagnostics: DiagnosticsSink = NoOpDiagnosticsSink(),
+        clock: DownloadClock = SystemDownloadClock()
     ) {
         self.context = context
         self.store = store
         self.episodeLookup = episodeLookup
+        self.diagnostics = diagnostics
         self.transport = transport
         self.deliveryBarrier = deliveryBarrier
         self.cancellationRequest = cancellationRequest
+        self.clock = clock
     }
 
     /// The state of this episode's transfer, or `nil` when it is not in flight.
@@ -174,27 +193,40 @@ final class DownloadManager {
         // transfer the user asked for is already running
         guard states[guid]?.isDownloading != true else { return }
         let enclosureURL = episode.enclosureURL
+        let loggedGUID = DiagnosticsGUID(guid)
+        let host = DiagnosticsHost(enclosureURL)
+        record(.downloadRequested(guid: loggedGUID, host: host))
         guard let url = Self.downloadURL(for: enclosureURL) else {
             let failure = Failure.invalidEnclosureURL(enclosureURL)
             states[guid] = failureState(for: failure)
+            record(.downloadNotStarted(guid: loggedGUID, code: DiagnosticsErrorCode(failure)))
             throw failure
         }
 
         // the token is taken before anything is written, so a completion routed
         // from the session while this transfer runs cannot write over it
         guard let token = claimOwnership(of: guid) else { return }
+        let attempt = DiagnosticsAttemptID(token: token)
 
         // before the slot, not after: a queued transfer with no state reads as
         // "not downloaded", so the row keeps offering Download and a second tap
         // fetches the same episode twice
-        states[guid] = .downloading(.waiting)
+        // the queued position is the place this call is about to take in the
+        // FIFO array `acquireSlot` appends to; an uncontended transfer skips
+        // the queue entirely and is connecting from the start
+        let queuePosition = waiting.count + 1
+        states[guid] = .downloading(isTransferring ? .queued(position: queuePosition) : .connecting)
 
         do {
+            if isTransferring {
+                record(.downloadQueued(guid: loggedGUID, attempt: attempt, position: queuePosition))
+            }
             try await acquireSlot(forGUID: guid)
             defer { releaseSlot() }
 
             // The task may have been cancelled before it acquired the slot.
             try Task.checkCancellation()
+            publishConnecting(forGUID: guid)
 
             // never assume launch succeeded: `CueApp.init()` prepares the
             // directory non-fatally, so the writing path prepares it again and
@@ -205,6 +237,7 @@ final class DownloadManager {
             // the guid rides with the request so the production transport can
             // stamp it on the task; a stub simply ignores it
             try checkCancellation(of: guid, heldBy: token)
+            record(.downloadStarted(guid: loggedGUID, attempt: attempt, host: host))
             let delivered: Result<(URL, URLResponse), Error>
             do {
                 delivered = .success(
@@ -212,34 +245,29 @@ final class DownloadManager {
             } catch {
                 delivered = .failure(error)
             }
-            // the session has handed this outcome over — success or failure — so
-            // everything below is work the background-events handler waits for
-            defer { deliveryBarrier() }
-
-            do {
-                try checkCancellation(of: guid, heldBy: token)
-            } catch {
-                if case .success(let (tempURL, _)) = delivered {
-                    try? FileManager.default.removeItem(at: tempURL)
-                }
-                throw error
-            }
-            let (tempURL, response) = try delivered.get()
-            if let failure = Self.statusFailure(for: response, enclosureURL: enclosureURL) {
-                // the temporary file is ours once the transport answers, and an
-                // error page is not an episode
-                try? FileManager.default.removeItem(at: tempURL)
-                throw failure
-            }
-
-            try await finishDownload(tempURL: tempURL, response: response, forGUID: guid, heldBy: token)
-            // only while this transfer is still the guid's owner: a completion
-            // routed from the session may have taken it over
-            if releaseOwnership(of: guid, heldBy: token) { states[guid] = nil }
+            // The session has handed this outcome over, so from here on the
+            // work belongs to the background-events accounting — and the
+            // barrier that reports it is armed only now, never from the `catch`
+            // below, which also catches pre-transport exits (a cancelled queue
+            // wait, a failed `prepareEpisodesDirectory()`). Decrementing for a
+            // delivery that never happened can drive another delivery's count
+            // to zero and answer UIKit mid-finish (decision 8).
+            try await completeDelivery(
+                delivered, guid: guid, token: token, enclosureURL: enclosureURL, attempt: attempt)
         } catch {
-            // a cancelled transfer is not a failed one — the user backed out
+            // a cancelled transfer is not a failed one — the user backed out.
+            // Post-delivery failures already wrote their state and released the
+            // token, so this answers `false` for them and writes nothing
+            //
+            // and only then is there anything left to record: `completeDelivery`
+            // has already written the terminal record for everything it caught,
+            // so this covers exactly the pre-transport exits it does not — a
+            // cancelled queue wait and a `prepareEpisodesDirectory()` that
+            // threw, which is a storage failure with no record at all otherwise
             if releaseOwnership(of: guid, heldBy: token) {
                 states[guid] = failureState(for: error)
+                recordTerminalFailure(
+                    error, guid: guid, attempt: attempt, enclosureURL: enclosureURL)
             }
             throw error
         }
@@ -256,9 +284,18 @@ final class DownloadManager {
         guard var attempt = attempts[guid] else { return }
         attempt.isCancellationRequested = true
         attempts[guid] = attempt
+        let loggedGUID = DiagnosticsGUID(guid)
+        let loggedAttempt = DiagnosticsAttemptID(token: attempt.token)
+        // the request, not the outcome: an active transfer's terminal
+        // `download.cancelled` is written when the delegate delivers, and one
+        // event for both would make a single cancel read as two
+        record(.downloadCancelRequested(guid: loggedGUID, attempt: loggedAttempt))
 
         if cancelWaiter({ $0.guid == guid }) {
             if releaseOwnership(of: guid, heldBy: attempt.token) { states[guid] = nil }
+            // a queued attempt never reaches `completeDelivery`, so this is the
+            // one place its terminal record can be written
+            record(.downloadCancelled(guid: loggedGUID, attempt: loggedAttempt))
             return
         }
         // only a task this attempt owns may be named. An attempt whose session
@@ -300,72 +337,6 @@ final class DownloadManager {
     func connect(to downloader: BackgroundDownloader) async {
         registerCompletionRoute(with: downloader)
         adopt(inFlightAttempts: await downloader.adoptInFlightTasks())
-    }
-
-    // MARK: - Deleting
-
-    /// Removes the downloaded file and clears the download columns (spec §7).
-    ///
-    /// Touches download state only: `isPlayed`, `playedAt` and the session log
-    /// are never written here, which is what makes deleting a download safe for
-    /// a played episode (AC 9).
-    ///
-    /// Clear, save, *then* remove. The reverse order can leave a row pointing at
-    /// a file that is gone, which is the direction the design forbids; this
-    /// order can at worst leave a file no row claims, which the reconciliation
-    /// sweep collects.
-    func deleteDownload(for episode: Episode) throws {
-        guard let filename = episode.localFilename else {
-            // nothing recorded — clearing again is not an error. A stray
-            // `downloadedAt` is still a write, and one left pending for autosave
-            // is a write a context-wide `rollback()` elsewhere can discard
-            guard let orphanedDownloadedAt = episode.downloadedAt else { return }
-            episode.downloadedAt = nil
-            do {
-                try context.save()
-            } catch {
-                episode.downloadedAt = orphanedDownloadedAt
-                throw error
-            }
-            return
-        }
-        let previousDownloadedAt = episode.downloadedAt
-
-        episode.localFilename = nil
-        episode.downloadedAt = nil
-        do {
-            try context.save()
-        } catch {
-            episode.localFilename = filename
-            episode.downloadedAt = previousDownloadedAt
-            throw error
-        }
-
-        // only a `.failed` state is this delete's to resolve. A transfer in
-        // flight is not: clearing it would drop the duplicate guard in
-        // `download(_:)`, so the row reads as idle and a tap starts a second
-        // transfer for the same guid. The screens no longer offer a delete
-        // mid-transfer, and this is the line that keeps that from mattering
-        let previousState = states[episode.guid]
-        if previousState?.isFailed == true {
-            states[episode.guid] = nil
-        }
-
-        do {
-            try store.removeFile(forRelativeFilename: filename)
-        } catch {
-            // the file is still there — `removeFile` swallows only a confirmed
-            // not-found — so the row must go on claiming it. Left cleared, the
-            // Downloads filter drops the episode and no screen can offer the
-            // delete again, which strands the file for good. The restoring save
-            // may itself fail; that error is discarded rather than reported,
-            // because the removal failure is the one the user has to see
-            episode.localFilename = filename
-            episode.downloadedAt = previousDownloadedAt
-            states[episode.guid] = previousState
-            try? context.save()
-            throw error
-        }
     }
 
     // MARK: - Helpers

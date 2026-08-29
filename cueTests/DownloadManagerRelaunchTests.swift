@@ -200,7 +200,7 @@ struct DownloadManagerRelaunchTests {
             manager.adopt(
                 inFlightAttempts: [DownloadAttemptIdentity(taskIdentifier: 1, guid: "guid-1")])
 
-            #expect(manager.state(for: episode) == .downloading(.waiting))
+            #expect(manager.state(for: episode) == .downloading(.connecting))
         }
     }
 }

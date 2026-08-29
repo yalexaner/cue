@@ -33,7 +33,7 @@ struct DownloadManagerQueueTests {
             await yieldUntil { gate.callCount == 1 }
 
             try #require(gate.callCount == 1)
-            #expect(manager.state(for: episode) == .downloading(.waiting))
+            #expect(manager.state(for: episode) == .downloading(.connecting))
 
             gate.open()
             try await download.value
@@ -57,9 +57,9 @@ struct DownloadManagerQueueTests {
             let secondDownload = Task { try await manager.download(second) }
             await yieldUntil { manager.state(for: second) != nil }
 
-            // the second one is still waiting its turn, and says so
+            // the second one is still waiting its turn, and says where in line
             #expect(gate.callCount == 1)
-            #expect(manager.state(for: second) == .downloading(.waiting))
+            #expect(manager.state(for: second) == .downloading(.queued(position: 1)))
 
             gate.open()
             try await firstDownload.value
@@ -92,12 +92,12 @@ struct DownloadManagerQueueTests {
 
             let download = Task { try await manager.download(episode) }
             await yieldUntil { gate.callCount == 1 }
-            try #require(manager.state(for: episode) == .downloading(.waiting))
+            try #require(manager.state(for: episode) == .downloading(.connecting))
 
             // returns without queueing a second transfer, and without failing
             try await manager.download(episode)
             #expect(gate.callCount == 1)
-            #expect(manager.state(for: episode) == .downloading(.waiting))
+            #expect(manager.state(for: episode) == .downloading(.connecting))
 
             gate.open()
             try await download.value
@@ -142,6 +142,78 @@ struct DownloadManagerQueueTests {
         }
     }
 
+    /// The three phases before a byte arrives are distinguishable.
+    ///
+    /// One literal "Waiting…" covering a queue and a connection that never
+    /// opened is what made a device session unreadable: a transfer parked
+    /// behind the slot says so and names its place in line, the one holding the
+    /// slot reads as connecting, and the first byte moves it on.
+    @Test func aTransferMovesFromQueuedThroughConnectingToDownloading() async throws {
+        try await withTemporaryBaseAsync { base in
+            let context = try makeContext()
+            let store = EpisodeStore(baseDirectory: base)
+            let first = try makeEpisode(in: context, guid: "guid-1")
+            let second = try makeEpisode(in: context, guid: "guid-2")
+            let gate = GatedFileTransport(stagingDirectory: base)
+            let manager = DownloadManager(context: context, store: store, transport: gate.transport)
+
+            let firstDownload = Task { try await manager.download(first) }
+            await yieldUntil { gate.callCount == 1 }
+            // uncontended: it never queues at all
+            try #require(manager.state(for: first) == .downloading(.connecting))
+
+            let secondDownload = Task { try await manager.download(second) }
+            await yieldUntil { manager.state(for: second) != nil }
+            try #require(manager.state(for: second) == .downloading(.queued(position: 1)))
+
+            gate.open()
+            try await firstDownload.value
+            // the slot was handed on, so the queued transfer is now connecting
+            await yieldUntil { manager.state(for: second) == .downloading(.connecting) }
+            #expect(manager.state(for: second) == .downloading(.connecting))
+
+            try await secondDownload.value
+            #expect(second.localFilename != nil)
+        }
+    }
+
+    /// Positions come from the FIFO array, so a departure renumbers the rest.
+    ///
+    /// Derived rather than stored on the attempt: a stored number left behind by
+    /// a cancellation would have a row claiming to be third in a queue of one.
+    @Test func cancellingAQueuedTransferRenumbersTheOnesBehindIt() async throws {
+        try await withTemporaryBaseAsync { base in
+            let context = try makeContext()
+            let store = EpisodeStore(baseDirectory: base)
+            let running = try makeEpisode(in: context, guid: "guid-1")
+            let second = try makeEpisode(in: context, guid: "guid-2")
+            let third = try makeEpisode(in: context, guid: "guid-3")
+            let gate = GatedFileTransport(stagingDirectory: base)
+            let manager = DownloadManager(context: context, store: store, transport: gate.transport)
+
+            let runningDownload = Task { try await manager.download(running) }
+            await yieldUntil { gate.callCount == 1 }
+            let secondDownload = Task { try await manager.download(second) }
+            await yieldUntil { manager.state(for: second) != nil }
+            let thirdDownload = Task { try await manager.download(third) }
+            await yieldUntil { manager.state(for: third) != nil }
+
+            try #require(manager.state(for: second) == .downloading(.queued(position: 1)))
+            try #require(manager.state(for: third) == .downloading(.queued(position: 2)))
+
+            secondDownload.cancel()
+            await #expect(throws: CancellationError.self) { try await secondDownload.value }
+
+            // the one behind it moved up, immediately, with the gate still shut
+            #expect(manager.state(for: third) == .downloading(.queued(position: 1)))
+
+            gate.open()
+            try await runningDownload.value
+            try await thirdDownload.value
+            #expect(third.localFilename != nil)
+        }
+    }
+
     /// The slot is released by a failed transfer too — otherwise every later
     /// download parks forever on a continuation nothing resumes.
     @Test func aFailedTransferHandsTheSlotOn() async throws {
@@ -160,6 +232,42 @@ struct DownloadManagerQueueTests {
 
             #expect(second.localFilename != nil)
             #expect(manager.state(for: second) == nil)
+        }
+    }
+
+    /// `download.queued` and the place in line it names.
+    ///
+    /// The queue suite above asserts the queued *state*'s position and the
+    /// diagnostics suite constructs the event by hand, so nothing runs a
+    /// contended download through the sink: an off-by-one in `queuePosition`, or
+    /// a dropped `record` call, ships a log that names the wrong place in line —
+    /// or omits queueing entirely, which is the exact ambiguity between "queued"
+    /// and "connecting" this step removed.
+    @Test func onlyAContendedTransferRecordsAQueuedEventAndItsPosition() async throws {
+        try await withTemporaryBaseAsync { base in
+            let context = try makeContext()
+            let store = EpisodeStore(baseDirectory: base)
+            let first = try makeEpisode(in: context, guid: "guid-1")
+            let second = try makeEpisode(in: context, guid: "guid-2")
+            let gate = GatedFileTransport(stagingDirectory: base)
+            let sink = RecordingDiagnosticsSink()
+            let manager = DownloadManager(
+                context: context, store: store, transport: gate.transport, diagnostics: sink)
+
+            let firstDownload = Task { try await manager.download(first) }
+            await yieldUntil { gate.callCount == 1 }
+            let secondDownload = Task { try await manager.download(second) }
+            await yieldUntil { manager.state(for: second) != nil }
+
+            let queued = sink.records(named: "download.queued")
+            #expect(queued.count == 1)
+            let record = try #require(queued.first)
+            #expect(record.fieldsByKey["guid"] == DiagnosticsGUID("guid-2").digest)
+            #expect(record.fieldsByKey["position"] == "1")
+
+            gate.open()
+            try await firstDownload.value
+            try await secondDownload.value
         }
     }
 }

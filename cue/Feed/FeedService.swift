@@ -33,6 +33,18 @@ struct FeedService {
         case allEpisodesOwnedElsewhere(String)
     }
 
+    /// How long a feed request may go without receiving anything before it
+    /// fails.
+    ///
+    /// Apple defines `timeoutInterval` as an *idle* timeout — the clock restarts
+    /// on every byte — so this bounds a silent server, not a slow one, and a
+    /// large feed that keeps arriving is never cut off. The inherited default is
+    /// 60 s, which is a minute of a spinner saying nothing before the user is
+    /// told the host is unreachable; twenty seconds is long enough for a
+    /// congested mobile link and short enough to answer while the user is still
+    /// looking at the screen.
+    static let requestTimeout: TimeInterval = 20
+
     /// The request the production transport sends.
     ///
     /// Extracted from the closure so the cache policy is assertable: it is a
@@ -42,9 +54,12 @@ struct FeedService {
     /// answered from `URLCache` and the refresh would report success having
     /// fetched nothing. Revalidating still honours a 304, so a polite feed costs
     /// no more bandwidth than before.
+    ///
+    /// The idle timeout it also sets is `requestTimeout`.
     static func feedRequest(for url: URL) -> URLRequest {
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadRevalidatingCacheData
+        request.timeoutInterval = requestTimeout
         return request
     }
 
@@ -55,10 +70,24 @@ struct FeedService {
 
     private let context: ModelContext
     private let transport: Transport
+    /// Readable rather than private so the default is assertable on a
+    /// constructed service — asserting on the default *expression* only
+    /// restates the declaration, and would stay green if the initialiser were
+    /// changed to a writer over the real Application Support directory, which
+    /// is the precise accident the no-op exists to prevent.
+    let diagnostics: DiagnosticsSink
 
-    init(context: ModelContext, transport: @escaping Transport = FeedService.sharedTransport) {
+    /// The sink defaults to the no-op, so no existing test writes to disk. The
+    /// three views that construct this service read the real one out of the
+    /// environment (`DiagnosticsEnvironment.swift`); the service itself stays a
+    /// cheap struct built at the call site.
+    init(
+        context: ModelContext, transport: @escaping Transport = FeedService.sharedTransport,
+        diagnostics: DiagnosticsSink = NoOpDiagnosticsSink()
+    ) {
         self.context = context
         self.transport = transport
+        self.diagnostics = diagnostics
     }
 
     // MARK: - Entry points
@@ -164,13 +193,45 @@ struct FeedService {
             throw Failure.invalidURL(urlString)
         }
 
-        let (data, response) = try await transport(url)
-        // a non-HTTP response carries no status to judge; only HTTP is gated
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw Failure.httpStatus(http.statusCode, urlString)
+        // scheme and host only: a private feed's URL *is* its credential
+        // (spec §6), and the type is what enforces that rather than this call
+        // site remembering to trim
+        let host = DiagnosticsHost(urlString)
+        let startedAt = ContinuousClock.now
+        diagnostics.record(DiagnosticsEvent.feedFetchStarted(host: host).record)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await transport(url)
+        } catch {
+            recordFetchFailure(error, host: host, startedAt: startedAt)
+            throw error
         }
 
-        let feed = try await Self.parse(data: data, sourceURL: urlString)
+        // a non-HTTP response carries no status to judge; only HTTP is gated,
+        // and a status of zero in the log says exactly that
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let elapsed = Self.elapsedMilliseconds(since: startedAt)
+        if status != 0, !(200..<300).contains(status) {
+            diagnostics.record(
+                DiagnosticsEvent.feedHTTPStatus(host: host, status: status, elapsedMilliseconds: elapsed).record)
+            throw Failure.httpStatus(status, urlString)
+        }
+        diagnostics.record(
+            DiagnosticsEvent.feedFetchSucceeded(host: host, status: status, elapsedMilliseconds: elapsed).record)
+
+        // a document that arrived and could not be read is a failure like any
+        // other: without this the log shows `feed.fetch_succeeded` and then
+        // nothing, which reads as an app that stopped rather than a feed that
+        // is broken
+        let feed: ParsedFeed
+        do {
+            feed = try await Self.parse(data: data, sourceURL: urlString)
+        } catch {
+            recordFetchFailure(error, host: host, startedAt: startedAt)
+            throw error
+        }
         // Cancel dismisses the add sheet while the request may already be
         // answered, and a view can go away mid-refresh the same way. Without
         // this the merge still commits, so the subscription the user backed out

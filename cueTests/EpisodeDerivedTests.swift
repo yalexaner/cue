@@ -205,6 +205,59 @@ struct EpisodeDerivedTests {
         }
     }
 
+    // MARK: - fileSize
+
+    @Test func fileSizeIsNilWhenFilenameIsNil() throws {
+        let context = try makeContext()
+        let episode = makeEpisode(in: context)
+
+        try withTemporaryBase { base in
+            let store = EpisodeStore(baseDirectory: base)
+            try #expect(episode.fileSize(in: store) == nil)
+        }
+    }
+
+    @Test func fileSizeIsNilForADanglingRow() throws {
+        let context = try makeContext()
+        let episode = makeEpisode(in: context)
+        episode.localFilename = "3F2A.mp3"
+
+        try withTemporaryBase { base in
+            let store = EpisodeStore(baseDirectory: base)
+            try #expect(episode.fileSize(in: store) == nil)
+        }
+    }
+
+    @Test func fileSizeReportsTheBytesOnDisk() throws {
+        let context = try makeContext()
+        let episode = makeEpisode(in: context)
+        episode.localFilename = "3F2A.mp3"
+
+        try withTemporaryBase { base in
+            let store = EpisodeStore(baseDirectory: base)
+            try store.prepareEpisodesDirectory()
+            let url = try store.url(forRelativeFilename: "3F2A.mp3")
+            try Data(repeating: 7, count: 2_048).write(to: url)
+
+            try #expect(episode.fileSize(in: store) == 2_048)
+        }
+    }
+
+    /// A size that cannot be read is never answered as zero: a confirmation
+    /// naming "Zero KB" would tell the user a real download costs nothing.
+    @Test func fileSizeThrowsForAnUnresolvableFilename() throws {
+        let context = try makeContext()
+        let episode = makeEpisode(in: context)
+        episode.localFilename = "../escaped.mp3"
+
+        try withTemporaryBase { base in
+            let store = EpisodeStore(baseDirectory: base)
+            #expect(throws: EpisodeStore.Failure.invalidFilename("../escaped.mp3")) {
+                try episode.fileSize(in: store)
+            }
+        }
+    }
+
     // MARK: - orthogonality of played state and download state
 
     @Test func markingPlayedLeavesDownloadStateUntouched() throws {

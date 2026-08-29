@@ -19,13 +19,21 @@ struct PodcastDetailView: View {
     )
 
     @Environment(\.modelContext) private var context
+    @Environment(\.diagnostics) private var diagnostics
     @Environment(DownloadManager.self) private var downloads
 
     let podcast: Podcast
 
     @State private var refreshErrorMessage: String?
+    @State private var status = FeedRefreshStatusModel()
     @State private var saveErrorMessage: String?
     @State private var downloadErrorText: String?
+    @State private var pendingDeletion: PendingDownloadDeletion?
+    @State private var pendingFailure: PendingDownloadFailure?
+
+    /// Constructed here, not defaulted inside the model: a size is measured on
+    /// demand for the confirmation and this list never scans the directory.
+    private let store = EpisodeStore()
 
     private var episodes: [Episode] {
         episodesNewestFirst(podcast.episodes)
@@ -33,26 +41,28 @@ struct PodcastDetailView: View {
 
     var body: some View {
         List(episodes) { episode in
-            EpisodeRow(episode: episode, downloadState: downloadState(for: episode))
-                .swipeActions(edge: .leading) {
-                    Button {
-                        setPlayed(!episode.isPlayed, on: episode)
-                    } label: {
-                        playedLabel(for: episode)
-                    }
-                    .tint(episode.isPlayed ? .gray : .accentColor)
+            EpisodeRow(episode: episode, downloadState: downloadState(for: episode)) { activation in
+                activateIndicator(activation, for: episode)
+            }
+            .swipeActions(edge: .leading) {
+                Button {
+                    setPlayed(!episode.isPlayed, on: episode)
+                } label: {
+                    playedLabel(for: episode)
                 }
-                .swipeActions(edge: .trailing) {
-                    downloadButton(for: episode)
+                .tint(episode.isPlayed ? .gray : .accentColor)
+            }
+            .swipeActions(edge: .trailing) {
+                downloadButton(for: episode)
+            }
+            .contextMenu {
+                Button {
+                    setPlayed(!episode.isPlayed, on: episode)
+                } label: {
+                    playedLabel(for: episode)
                 }
-                .contextMenu {
-                    Button {
-                        setPlayed(!episode.isPlayed, on: episode)
-                    } label: {
-                        playedLabel(for: episode)
-                    }
-                    downloadButton(for: episode)
-                }
+                downloadButton(for: episode)
+            }
         }
         .navigationTitle(podcast.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -66,9 +76,55 @@ struct PodcastDetailView: View {
             }
         }
         .refreshable { await refresh() }
+        .feedRefreshStatusBar(status.statusText, isActive: true)
         .refreshErrorAlert($refreshErrorMessage)
         .errorAlert("Could Not Save", $saveErrorMessage)
         .errorAlert("Download Failed", $downloadErrorText)
+        .deleteDownloadConfirmation($pendingDeletion) { guid in
+            episode(withGUID: guid).map { deleteDownload($0) }
+        }
+        .downloadFailureAlert($pendingFailure) { guid in
+            episode(withGUID: guid).map { download($0) }
+        }
+    }
+
+    /// The row a confirmation was raised on, resolved against the list on screen.
+    private func episode(withGUID guid: String) -> Episode? {
+        podcast.episodes.first { $0.guid == guid }
+    }
+
+    /// Routes an indicator tap through the shared policy.
+    ///
+    /// The confirmation's size is measured here rather than in the row: the read
+    /// throws, and a view builder that swallowed it would report an unreadable
+    /// file as an episode occupying nothing.
+    private func activateIndicator(_ activation: DownloadIndicatorActivation, for episode: Episode) {
+        switch activation {
+        case .download:
+            download(episode)
+        case .cancel:
+            cancelDownload(episode)
+        case .confirmDelete:
+            confirmDelete(episode)
+        case .showFailure:
+            showFailure(for: episode)
+        }
+    }
+
+    private func confirmDelete(_ episode: Episode) {
+        do {
+            let byteCount = try episode.fileSize(in: store)
+            let message = deleteDownloadConfirmationMessage(
+                episodeTitle: episode.title, byteCount: byteCount)
+            pendingDeletion = PendingDownloadDeletion(id: episode.guid, message: message)
+        } catch {
+            downloadErrorText = downloadErrorMessage(for: error)
+        }
+    }
+
+    private func showFailure(for episode: Episode) {
+        guard case .failed(let message) = downloadState(for: episode) else { return }
+        pendingFailure = PendingDownloadFailure(id: episode.guid, message: message)
     }
 
     private func downloadState(for episode: Episode) -> EpisodeDownloadState {
@@ -168,13 +224,16 @@ struct PodcastDetailView: View {
     ///
     /// Navigating away cancels the refresh; that is not a failure to alert on.
     private func refresh() async {
+        let host = DiagnosticsHost(podcast.feedURL)
+        status.began(FeedRefreshStep(host: host, index: 0, total: 1))
+        defer { status.finished() }
         do {
-            try await FeedService(context: context).refresh(podcast)
+            try await FeedService(context: context, diagnostics: diagnostics).refresh(podcast)
             refreshErrorMessage = nil
         } catch {
             // nil when the view went away mid-refresh; an alert on a screen
             // nobody is looking at is not a report
-            refreshErrorMessage = reportableFeedErrorMessage(for: error)
+            refreshErrorMessage = reportableFeedErrorMessage(for: error, host: host)
         }
     }
 }
@@ -184,11 +243,19 @@ struct PodcastDetailView: View {
 ///
 /// The two indicators are independent, and both can show at once: a downloaded
 /// episode that has been played keeps its file (spec §4, AC 8).
+///
+/// The download indicator is a button in *every* phase, not only the failed
+/// one — starting a download used to need a swipe or a long-press, which is a
+/// gesture nobody discovers. What the tap does comes from
+/// `downloadIndicatorActivation(for:)` and is handed back to the screen, which
+/// owns the confirmation and the failure alert: measuring a size to name in the
+/// confirmation throws, and that belongs on the screen's error path.
+///
+/// The row's own tap gesture stays unbound; playback claims it in a later step.
 private struct EpisodeRow: View {
     let episode: Episode
     let downloadState: EpisodeDownloadState
-
-    @State private var isFailurePresented = false
+    let activate: (DownloadIndicatorActivation) -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -210,51 +277,51 @@ private struct EpisodeRow: View {
         }
     }
 
-    @ViewBuilder
     private var downloadIndicator: some View {
+        Button {
+            activate(downloadIndicatorActivation(for: downloadState))
+        } label: {
+            indicatorContent
+                .frame(minWidth: downloadIndicatorMinimumTapTarget, minHeight: downloadIndicatorMinimumTapTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .downloadIndicatorLabels(downloadState)
+    }
+
+    @ViewBuilder
+    private var indicatorContent: some View {
         switch downloadState {
         case .downloading(let progress):
             downloadProgress(progress)
         case .downloaded:
             Image(systemName: "arrow.down.circle.fill")
                 .foregroundStyle(.secondary)
-                .accessibilityLabel("Downloaded")
-        case .failed(let message):
-            Button {
-                isFailurePresented = true
-            } label: {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Download Failed")
-            .accessibilityHint("Shows failure details")
-            .alert("Download Failed", isPresented: $isFailurePresented) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(message)
-            }
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
         case .notDownloaded:
-            EmptyView()
+            Image(systemName: "arrow.down.circle")
+                .foregroundStyle(.secondary)
         }
     }
 
-    @ViewBuilder
     private func downloadProgress(_ progress: DownloadProgress) -> some View {
-        switch progress {
-        case .waiting:
-            Text("Waiting…")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("Download Waiting")
-        case .indeterminate:
-            ProgressView()
-                .accessibilityLabel("Downloading")
-        case .fraction(_, let value):
-            ProgressView(value: value)
-                .frame(width: 48)
-                .accessibilityLabel("Downloading")
-                .accessibilityValue(value.formatted(.percent.precision(.fractionLength(0))))
+        let status = compactTransferStatus(progress)
+        return HStack(spacing: 6) {
+            if let value = status.fractionValue {
+                ProgressView(value: value)
+                    .frame(width: 48)
+            } else if status.showsSpinner {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            if let text = status.text {
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
     }
 }

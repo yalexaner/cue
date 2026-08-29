@@ -91,4 +91,22 @@ extension Episode {
         guard let localFilename else { return false }
         return try store.fileExists(forRelativeFilename: localFilename)
     }
+
+    /// What this episode's file occupies on disk, or `nil` when there is none.
+    ///
+    /// The one call for a size a screen has not already measured — the podcast
+    /// detail list never scans the download directory, so a confirmation that
+    /// names what is about to be deleted has to ask on demand.
+    ///
+    /// `nil` means positively no file: either no stored filename, or a file the
+    /// store confirmed absent. Every other storage failure propagates, for the
+    /// same reason `isDownloaded(in:)` throws — answering an unreadable file as
+    /// zero bytes would tell the user a real download costs nothing.
+    ///
+    /// The store is required, never defaulted: a default would resolve against
+    /// the real Application Support, which a test must never touch.
+    func fileSize(in store: EpisodeStore) throws -> Int? {
+        guard let localFilename else { return nil }
+        return try store.fileSize(forRelativeFilename: localFilename)
+    }
 }

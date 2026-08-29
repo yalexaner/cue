@@ -60,12 +60,12 @@ struct DownloadManagerOwnershipTests {
 
             let download = Task { try await manager.download(episode) }
             await yieldUntil { gate.callCount == 1 }
-            try #require(manager.state(for: episode) == .downloading(.waiting))
+            try #require(manager.state(for: episode) == .downloading(.connecting))
 
             await manager.handleCompletion(.success((staged, try response(200))), forGUID: "guid-1")
 
             // the live transfer keeps its marker, so no row offers Delete
-            #expect(manager.state(for: episode) == .downloading(.waiting))
+            #expect(manager.state(for: episode) == .downloading(.connecting))
             #expect(episode.localFilename == nil)
             // and the orphan's file is discarded rather than moved in behind it
             #expect(!FileManager.default.fileExists(atPath: staged.path(percentEncoded: false)))
@@ -95,7 +95,7 @@ struct DownloadManagerOwnershipTests {
 
             let download = Task { try await manager.download(episode) }
             await yieldUntil { gate.callCount == 1 }
-            try #require(manager.state(for: episode) == .downloading(.waiting))
+            try #require(manager.state(for: episode) == .downloading(.connecting))
 
             await manager.handleCompletion(.failure(StubTransportError.offline), forGUID: "guid-1")
 
@@ -105,7 +105,7 @@ struct DownloadManagerOwnershipTests {
             // `download` call: under the regression that call parks on the
             // single transfer slot behind a gate this test has not opened yet,
             // and a hung suite reports nothing
-            #expect(manager.state(for: episode) == .downloading(.waiting))
+            #expect(manager.state(for: episode) == .downloading(.connecting))
 
             gate.open()
             try await download.value

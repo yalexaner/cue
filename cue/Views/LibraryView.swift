@@ -9,10 +9,13 @@ import SwiftUI
 /// cheapest way to keep SwiftData writes ordered.
 struct LibraryView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.diagnostics) private var diagnostics
     @Query(sort: \Podcast.addedAt, order: .forward) private var podcasts: [Podcast]
 
     @State private var isPresentingAddFeed = false
     @State private var refreshErrorMessage: String?
+    @State private var refreshSummaryMessage: String?
+    @State private var status = FeedRefreshStatusModel()
 
     var body: some View {
         List(podcasts) { podcast in
@@ -44,15 +47,34 @@ struct LibraryView: View {
             }
         }
         .sheet(isPresented: $isPresentingAddFeed) { AddFeedView() }
+        .feedRefreshStatusBar(
+            status.statusText ?? refreshSummaryMessage,
+            isActive: status.statusText != nil,
+            // only the summary is dismissible: a running sweep's status ends
+            // when the sweep does, but the summary would otherwise stay above
+            // the list for the rest of the session
+            onDismiss: status.statusText == nil && refreshSummaryMessage != nil
+                ? { refreshSummaryMessage = nil } : nil
+        )
         .refreshErrorAlert($refreshErrorMessage)
     }
 
     /// Runs the sweep and turns whatever it reports into the alert's text.
     ///
     /// The sweep itself is `refreshAll(_:using:)`, which is plain and tested.
+    /// A partial sweep reports both counts as well as the alert: the alert names
+    /// one dead feed, and on its own it reads as "the refresh failed" when four
+    /// other shows did in fact update.
     private func refreshEverySubscription() async {
-        let error = await refreshAll(podcasts, using: FeedService(context: context))
-        refreshErrorMessage = error.map(feedErrorMessage(for:))
+        let service = FeedService(context: context, diagnostics: diagnostics)
+        refreshSummaryMessage = nil
+        let summary = await refreshAll(podcasts, using: service) { status.began($0) }
+        status.finished()
+        refreshSummaryMessage = feedRefreshSummaryText(
+            refreshed: summary.refreshed, failed: summary.failed)
+        refreshErrorMessage = summary.firstFailure.map {
+            feedErrorMessage(for: $0.error, host: $0.host)
+        }
     }
 }
 

@@ -50,6 +50,27 @@ minutes.
    token-bearing request can be accepted over a weak TLS configuration without
    the app noticing.
 
+8. **An exported diagnostics file is shareable output, and is designed to be.**
+   The export exists so the owner can hand a device failure to an agent, so it
+   leaves the device through the share sheet and is visible in Files. What it
+   may contain: a timestamp, a level, a category, an event name, a scheme and
+   host (`DiagnosticsHost`, the same `redactedAddress(_:)` reduction the alerts
+   use), a truncated SHA-256 digest of an episode guid, an attempt identifier
+   derived from an ownership token, byte counts, a queue position, a decile
+   index, an elapsed-milliseconds duration, an HTTP status, a background task
+   identifier (`URLSessionTask.taskIdentifier`, reused by iOS and therefore
+   never used as the attempt identity), a bridged error domain and code, and —
+   once per process on the launch record — the build identifier. What it must never contain: a full feed or enclosure
+   URL, any userinfo, path, query or fragment, an unhashed guid, a container
+   path, or an error's `localizedDescription` — all of which can carry a token.
+   Those are not call-site habits: hosts and guids can only enter a record
+   through opaque sanitising types, and the error field reduces to domain and
+   code with the domain itself sanitised, so a new call site cannot smuggle text
+   through. Adding a diagnostics field means adding it to that list here, or not
+   adding it. The header block additionally carries the build, device model and
+   system version, which are not secrets. A shared export is still device
+   telemetry — treat it as you would a screenshot, not as public data.
+
 ## Running gitleaks locally
 
 ```sh

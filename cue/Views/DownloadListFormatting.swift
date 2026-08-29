@@ -10,9 +10,27 @@ import Foundation
 struct DownloadGroup: Identifiable {
     let id: String
     let title: String
-    let episodes: [Episode]
+    let episodes: [DownloadedEpisode]
     /// Bytes on disk for this group, summed from the sizes the caller measured.
     let byteCount: Int
+}
+
+/// One downloaded episode with what its own file occupies on disk.
+///
+/// The size the Downloads scan measures reaches the row through this pair
+/// rather than only the group and total sums: the row is where the user reads
+/// what an individual episode costs, and re-measuring it per row would mean a
+/// throwing file-system read on every render. `byteCount` is optional because
+/// a file whose size could not be measured must render as no size at all — the
+/// scan contributes an entry only for a size it actually got.
+///
+/// `id` is the episode's `guid` — the store's uniqueness scope, stable across
+/// the fetches that rebuild the list — rather than the model's object identity.
+struct DownloadedEpisode: Identifiable {
+    let episode: Episode
+    let byteCount: Int?
+
+    var id: String { episode.guid }
 }
 
 /// The title a downloaded episode with no podcast is filed under.
@@ -36,7 +54,9 @@ func downloadGroups(_ episodes: [Episode], sizes: [String: Int]) -> [DownloadGro
         DownloadGroup(
             id: feedURL,
             title: episodes.first?.podcast?.title ?? ungroupedTitle,
-            episodes: episodesNewestFirst(episodes),
+            episodes: episodesNewestFirst(episodes).map {
+                DownloadedEpisode(episode: $0, byteCount: sizes[$0.guid])
+            },
             byteCount: episodes.reduce(0) { $0 + (sizes[$1.guid] ?? 0) }
         )
     }
@@ -92,7 +112,9 @@ func episodeDownloadState(
 ///
 /// One question with one answer, so the swipe action and the context menu cannot
 /// drift apart: an episode mid-transfer offers Cancel rather than Delete,
-/// because deleting under a running move is a race.
+/// because deleting under a running move is a race. Every download phase answers
+/// the same way — a queued transfer is cancellable before it has a session task
+/// (`DownloadQueue.swift`), and a connecting one has nothing on disk to delete.
 func downloadAction(for state: EpisodeDownloadState) -> DownloadRowAction {
     switch state {
     case .notDownloaded, .failed:

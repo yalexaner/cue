@@ -30,16 +30,24 @@ extension DownloadManager {
         }
         downloader.setOrphanedCompletionHandler { [weak self] result, guid in
             Task { @MainActor [weak self] in
-                // the system may suspend the app once the downloader answers
-                // UIKit, and it waits for this
-                defer { downloader.completeDeliveredWork() }
                 guard let self else {
                     if case .success(let (tempURL, _)) = result {
                         try? FileManager.default.removeItem(at: tempURL)
                     }
+                    // the system waits for this even when there is nothing left
+                    // here to receive the outcome
+                    downloader.completeDeliveredWork()
                     return
                 }
                 await handleCompletion(result, forGUID: guid)
+                // out of `defer`, so it fires *after* the failure state and the
+                // log rather than as the inner scope exits, and after a flush:
+                // the records left unprotected by the old ordering were exactly
+                // the terminal ones (decision 8). A flush that achieves nothing
+                // must still complete delivery — a lost log is survivable, a
+                // never-answered UIKit handler is not
+                await diagnostics.flush()
+                downloader.completeDeliveredWork()
             }
         }
     }
@@ -80,11 +88,15 @@ extension DownloadManager {
         // is turned away by `orphanOwnership` instead of being handed the same
         // token and finishing alongside us
         markFinishing(guid: guid, heldBy: token)
-        states[guid] = .downloading(attempts[guid]?.progress ?? .waiting)
+        // read before the finish, which may put the columns back: the failure
+        // record below needs a host to name, and only the episode has one
+        let enclosureURL = (try? episode(forGUID: guid))?.enclosureURL ?? ""
+        states[guid] = .downloading(attempts[guid]?.progress ?? .connecting)
         do {
             try checkCancellation(of: guid, heldBy: token)
             switch result {
             case .success(let (tempURL, response)):
+                publishFinalizing(forGUID: guid, heldBy: token)
                 try await finishDownload(
                     tempURL: tempURL, response: response, forGUID: guid,
                     heldBy: token)
@@ -101,6 +113,9 @@ extension DownloadManager {
             if releaseOwnership(of: guid, heldBy: token) {
                 states[guid] = failureState(for: error)
             }
+            recordTerminalFailure(
+                error, guid: guid, attempt: DiagnosticsAttemptID(token: token),
+                enclosureURL: enclosureURL)
             // never `.public`: a `httpStatus` failure carries the enclosure URL,
             // and a private feed's URL is a token (spec §6)
             Self.logger.error("background download failed: \(error, privacy: .private)")
@@ -116,11 +131,26 @@ extension DownloadManager {
         for identity in identities where !resolvedGUIDs.contains(identity.guid) {
             guard attempts[identity.guid] == nil else { continue }
             guard
-                claimOwnership(
+                let token = claimOwnership(
                     of: identity.guid, origin: .adopted,
-                    taskIdentifier: identity.taskIdentifier) != nil
+                    taskIdentifier: identity.taskIdentifier)
             else { continue }
-            states[identity.guid] = .downloading(.waiting)
+            states[identity.guid] = .downloading(.connecting)
+            // the same arming `publishConnecting` does on the live route.
+            // Without it the only sites that arm a deadline are that call and a
+            // strict byte increase, so an adopted transfer the system is holding
+            // without progress would read "Connecting…" for good — and the
+            // relaunch route is exactly where an unexplainable transfer lives
+            if var attempt = attempts[identity.guid] {
+                attempt.lastIncreaseAt = clock.now()
+                attempts[identity.guid] = attempt
+                scheduleStallDeadline(forGUID: identity.guid)
+            }
+            record(
+                .downloadAdopted(
+                    guid: DiagnosticsGUID(identity.guid),
+                    attempt: DiagnosticsAttemptID(token: token),
+                    taskIdentifier: identity.taskIdentifier))
         }
     }
 
@@ -133,6 +163,13 @@ extension DownloadManager {
         guard attempt.origin != .started, !attempt.isFinishing else {
             Self.logger.notice("completion for a guid already in flight here; discarding the file")
             discardDeliveredFile(in: result)
+            // the owner writes its own terminal record, but this outcome is a
+            // second, separate finished transfer being thrown away — without a
+            // line for it the log cannot explain where it went
+            record(
+                .downloadDiscarded(
+                    guid: DiagnosticsGUID(guid), attempt: DiagnosticsAttemptID(token: attempt.token),
+                    reason: .guidInFlight))
             return .claimedHere
         }
         return .available(adoptedToken: attempt.token)
@@ -151,11 +188,20 @@ extension DownloadManager {
         _ result: Result<(URL, URLResponse), Error>, guid: String,
         adoptedToken: UUID?
     ) -> Bool {
+        // both exits below are terminal for this guid and neither reaches
+        // `recordTerminalFailure`, so each writes its own record: the discard
+        // leaves an adopted transfer's log ending at `download.adopted`, and the
+        // lookup failure puts a *user-visible* failed row on screen that the
+        // exported log would otherwise not mention at all
+        let attempt = adoptedToken.map { DiagnosticsAttemptID(token: $0) }
         do {
             guard try episode(forGUID: guid) != nil else {
                 discardDeliveredFile(in: result)
                 retireAdoptedAttempt(forGUID: guid, token: adoptedToken)
                 states[guid] = nil
+                record(
+                    .downloadDiscarded(
+                        guid: DiagnosticsGUID(guid), attempt: attempt, reason: .episodeMissing))
                 return false
             }
             return true
@@ -163,6 +209,14 @@ extension DownloadManager {
             discardDeliveredFile(in: result)
             retireAdoptedAttempt(forGUID: guid, token: adoptedToken)
             states[guid] = .failed(message: Self.episodeLookupFailureMessage)
+            let code = DiagnosticsErrorCode(error)
+            // an outcome delivered before ownership was claimed has no attempt
+            // to name, which is what `download.not_started` is for
+            if let attempt {
+                record(.downloadFailed(guid: DiagnosticsGUID(guid), attempt: attempt, code: code))
+            } else {
+                record(.downloadNotStarted(guid: DiagnosticsGUID(guid), code: code))
+            }
             Self.logger.error(
                 "could not resolve the episode for a background download: \(error, privacy: .private)")
             return false

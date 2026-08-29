@@ -58,6 +58,10 @@ extension DownloadManager {
     func releaseOwnership(of guid: String, heldBy token: UUID) -> Bool {
         guard attempts[guid]?.token == token else { return false }
         attempts[guid] = nil
+        // the attempt is gone, so nothing armed against it may still fire: a
+        // trailing publication would write a phase for a transfer that has
+        // retired, and a stall deadline would do the same thirty seconds later
+        cancelPacing(forGUID: guid)
         return true
     }
 }

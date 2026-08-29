@@ -15,6 +15,11 @@ struct CueApp: App {
 
     private let container: ModelContainer
 
+    /// The one production sink: a serial writer that owns the log file
+    /// (decision 6). Held here rather than reached for, so every other type
+    /// takes it as an injected parameter.
+    private let diagnostics: DiagnosticsFileWriter
+
     /// Owned here rather than constructed at the call site, unlike every other
     /// service: it holds the state of transfers that outlive any view, and the
     /// background session's delegate has to have somewhere to deliver to. See
@@ -22,6 +27,11 @@ struct CueApp: App {
     @State private var downloads: DownloadManager
 
     init() {
+        diagnostics = DiagnosticsFileWriter(baseDirectory: DiagnosticsFileWriter.defaultDirectory())
+        // once per process, so a relaunch made purely to deliver a background
+        // transfer is visible in the file as a break rather than as a gap
+        diagnostics.record(DiagnosticsEvent.launch(build: DiagnosticsExport.buildIdentifier).record)
+
         // spec §5: Episodes/ is created on first launch and excluded from backup.
         // Resolution never provisions, so this is the only thing that creates it
         // before a download lands. Non-fatal: the library, playback and the
@@ -47,7 +57,8 @@ struct CueApp: App {
             // the transport's other half: the session counts an outcome as
             // handed over until the finish that follows it reports back
             deliveryBarrier: { BackgroundDownloader.shared.completeDeliveredWork() },
-            cancellationRequest: BackgroundDownloader.shared.cancellationRequest
+            cancellationRequest: BackgroundDownloader.shared.cancellationRequest,
+            diagnostics: diagnostics
         )
         // here rather than only in the scene's `.task`: a launch made purely to
         // deliver a finished background transfer may never present a scene, and
@@ -60,6 +71,12 @@ struct CueApp: App {
         WindowGroup {
             ContentView()
                 .environment(downloads)
+                // the only seam that reaches the three views which construct a
+                // `FeedService` themselves
+                .environment(\.diagnostics, diagnostics)
+                // the read-back half, so the export screen never downcasts the
+                // sink it was handed for writing
+                .environment(\.diagnosticsSnapshots, diagnostics)
                 // re-attach to transfers the system kept running while the app
                 // was gone, and claim any that finished in the meantime
                 .task { await downloads.connect(to: .shared) }

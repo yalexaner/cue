@@ -60,7 +60,7 @@ struct DownloadGroupingTests {
 
         let groups = downloadGroups([old, new], sizes: [:])
 
-        #expect(groups[0].episodes.map(\.guid) == ["new", "old"])
+        #expect(groups[0].episodes.map(\.episode.guid) == ["new", "old"])
     }
 
     /// Groups are ordered by title so two rebuilds of the same library agree.
@@ -101,7 +101,7 @@ struct DownloadGroupingTests {
         let groups = downloadGroups([orphan], sizes: [:])
 
         #expect(groups.count == 1)
-        #expect(groups[0].episodes.map(\.guid) == ["orphan"])
+        #expect(groups[0].episodes.map(\.episode.guid) == ["orphan"])
         #expect(groups[0].id.isEmpty)
         #expect(groups[0].title == "Unknown Podcast")
     }
@@ -132,6 +132,34 @@ struct DownloadGroupingTests {
 
         #expect(groups[0].byteCount == 42)
         #expect(groups[0].episodes.count == 2)
+    }
+
+    /// Each row carries its own measured size, not just the group total: the
+    /// Downloads scan is the only place that measures, and the row is where the
+    /// user reads what one episode costs.
+    @Test func eachEpisodeCarriesItsOwnMeasuredSize() throws {
+        let context = try makeContext()
+        let podcast = makePodcast(context, feedURL: testFeedURL, title: "Show")
+        let old = makeEpisode(context, guid: "old", podcast: podcast, publishedAt: date(1))
+        let new = makeEpisode(context, guid: "new", podcast: podcast, publishedAt: date(3))
+
+        let groups = downloadGroups([old, new], sizes: ["old": 1_000, "new": 2_000])
+
+        #expect(groups[0].episodes.map(\.byteCount) == [2_000, 1_000])
+        #expect(groups[0].episodes.map(\.id) == ["new", "old"])
+    }
+
+    /// An unmeasured episode reaches its row with no size rather than with a
+    /// zero it would then render as "Zero KB".
+    @Test func anUnmeasuredEpisodeReachesItsRowWithNoSize() throws {
+        let context = try makeContext()
+        let podcast = makePodcast(context, feedURL: testFeedURL, title: "Show")
+        let measured = makeEpisode(context, guid: "measured", podcast: podcast, publishedAt: date(2))
+        let unmeasured = makeEpisode(context, guid: "unmeasured", podcast: podcast, publishedAt: date(1))
+
+        let groups = downloadGroups([measured, unmeasured], sizes: ["measured": 42])
+
+        #expect(groups[0].episodes.map(\.byteCount) == [42, nil])
     }
 }
 
@@ -170,11 +198,11 @@ struct EpisodeDownloadStateTests {
     /// A transfer in flight outranks the file it is about to replace.
     @Test func aTransferInFlightOutranksAStoredFilename() {
         #expect(
-            episodeDownloadState(localFilename: "a.mp3", transfer: .downloading(.waiting))
-                == .downloading(.waiting))
+            episodeDownloadState(localFilename: "a.mp3", transfer: .downloading(.connecting))
+                == .downloading(.connecting))
         #expect(
-            episodeDownloadState(localFilename: nil, transfer: .downloading(.waiting))
-                == .downloading(.waiting))
+            episodeDownloadState(localFilename: nil, transfer: .downloading(.connecting))
+                == .downloading(.connecting))
         #expect(
             episodeDownloadState(
                 localFilename: nil, transfer: .downloading(.indeterminate(bytesWritten: 12)))
@@ -182,8 +210,8 @@ struct EpisodeDownloadStateTests {
         #expect(
             episodeDownloadState(
                 localFilename: nil,
-                transfer: .downloading(.fraction(bytesWritten: 50, value: 0.5)))
-                == .downloading(.fraction(bytesWritten: 50, value: 0.5)))
+                transfer: .downloading(.fraction(bytesWritten: 50, expectedBytes: 100)))
+                == .downloading(.fraction(bytesWritten: 50, expectedBytes: 100)))
     }
 
     /// A failed retry over a file that is still there is not a failed episode.
@@ -212,6 +240,11 @@ struct DownloadRowActionTests {
     /// A running transfer offers Cancel rather than Delete, because deleting
     /// under a running move is a race.
     @Test func aRunningTransferOffersCancellation() {
-        #expect(downloadAction(for: .downloading(.waiting)) == .cancel)
+        // every phase, queued included: a queued transfer is cancellable before
+        // it has a session task, and a connecting one has no file to delete
+        #expect(downloadAction(for: .downloading(.queued(position: 3))) == .cancel)
+        #expect(downloadAction(for: .downloading(.connecting)) == .cancel)
+        #expect(downloadAction(for: .downloading(.indeterminate(bytesWritten: 8))) == .cancel)
+        #expect(downloadAction(for: .downloading(.fraction(bytesWritten: 1, expectedBytes: 2))) == .cancel)
     }
 }
