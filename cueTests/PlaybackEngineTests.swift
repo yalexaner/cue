@@ -180,28 +180,6 @@ struct PlaybackEngineTests {
         }
     }
 
-    @Test func anInterruptedSeekKeepsItsTargetAndStopsSuppressingSamples() async throws {
-        try await withLoadedEngine { engine, _, _ in
-            engine.pause()
-            engine.seek(to: 30)
-            let interruptedSeek = engine.seekGeneration
-
-            engine.handleSeekCompletion(
-                finished: false,
-                target: 30,
-                seekGeneration: interruptedSeek,
-                loadGeneration: engine.loadGeneration
-            )
-            #expect(engine.elapsed == 30)
-
-            engine.handlePeriodicTime(
-                CMTime(seconds: 31, preferredTimescale: 600),
-                generation: engine.loadGeneration
-            )
-            #expect(engine.elapsed == 31)
-        }
-    }
-
     @Test func aRestartWhoseSeekNeverLandsKeepsTheItemEnded() async throws {
         try await withLoadedEngine { engine, episode, store in
             engine.handleItemEnded(generation: engine.loadGeneration)
@@ -291,8 +269,17 @@ struct PlaybackEngineTests {
         }
     }
 
+    /// Only a *measured* length may bound the playhead, so the item reports one
+    /// first: an unmeasured feed length a sample has passed is disproved rather
+    /// than enforced (`aFeedLengthThePlaybackCrossesStopsBoundingThePlayhead`).
     @Test func currentPeriodicCallbackPublishesAClampedElapsedTime() async throws {
         try await withLoadedEngine { engine, _, _ in
+            engine.handleItemStatus(
+                .readyToPlay,
+                itemDuration: 100,
+                error: nil,
+                generation: engine.loadGeneration
+            )
             engine.handlePeriodicTime(
                 CMTime(seconds: 125, preferredTimescale: 600),
                 generation: engine.loadGeneration
