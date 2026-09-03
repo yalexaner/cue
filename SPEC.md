@@ -324,8 +324,16 @@ precisely the discontinuity the user may want to jump back across.
 `addPeriodicTimeObserver` at 10s intervals writes `endPosition` on the live
 session. Without this, a force-quit or crash leaves a session with a stale end.
 
-On launch, any session with `endedAt == nil` is closed by setting `endedAt` to its
-last modification. Never leave more than one live session in the store.
+On launch, any session with `endedAt == nil` is closed at a derived end:
+`startedAt` plus the wall-clock time its recorded positions account for,
+`(endPosition - startPosition) / rate`. The schema deliberately carries no
+modification timestamp — adding one would be a stored position field by another
+name. Never leave more than one live session in the store.
+
+A session that ended at the end of the file leaves `currentPosition` at the end.
+Playing that episode again starts it from the beginning rather than on its last
+frame; the finished session stays in the log, so the position is still there to
+revert to.
 
 ### Revert UI
 

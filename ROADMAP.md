@@ -700,17 +700,32 @@ inert, play/pause works (AC 10). Rate changes take effect without pitch shift.
 
 **Goal.** The feature the app exists for.
 
-**Files.** `Playback/SessionRecorder.swift`, plus `PlaybackEngine` integration
+**Files.** `App/CueApp.swift`, `Playback/SessionEvent.swift`,
+`Playback/SessionRecorder.swift`, `Playback/PlaybackEngine.swift`,
+`Playback/PlaybackAudioSession.swift`, `Playback/PlaybackFailure.swift`,
+`Playback/PlaybackObservers.swift`, `Playback/PlaybackPolicy.swift`,
+`Playback/PlaybackSeeking.swift`
 
 **Tasks.**
 
-1. Open a session on play from stopped or paused.
+0. Split `PlaybackEngine.swift` against the 400-line `file_length` limit before
+   any behaviour change: the audio-session handlers, `Failure` and
+   `restartLoadedItem()` move to their own files.
+1. Open a session on play from stopped or paused. The engine emits
+   `SessionEvent` values and stays SwiftData-free; `CueApp.init()` wires them to
+   a `SessionRecorder` and runs the launch sweep before any scene exists.
 2. Close on pause, manual seek, episode switch, rate change, end of file, and app
-   termination. **Not** on backgrounding — audio continues, the session is live.
+   termination — plus every other path that ends audible playback: interruption,
+   lost output route, item, player and remote failure, all through one close
+   funnel. **Not** on backgrounding — audio continues, the session is live.
 3. A manual seek closes the current session and opens a new one at the target.
+   A seek that clamps to the position it started from moves nothing and reports
+   nothing.
 4. Heartbeat via `addPeriodicTimeObserver` at 10s, writing `endPosition`.
 5. On launch, close any session with `endedAt == nil`. Never leave more than one
    live session in the store.
+6. A derived position at the end of the file restarts the episode instead of
+   resuming on its last frame.
 
 **Acceptance.** Play 5m, pause, play, pause → two sessions with contiguous
 positions (spec AC 5). Seek forward mid-playback → pre-seek session retains its
