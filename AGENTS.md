@@ -36,7 +36,12 @@ which is a project-wide decision, not a per-step workaround.)
 `DownloadDiagnostics.swift`, `DownloadRows.swift`, `DiagnosticsExportButton.swift`,
 `DownloadManagerAttemptIdentityTests.swift`, `DownloadManagerStallTests.swift`
 `DownloadCancellationDiagnosticsTests.swift`, `DownloadDeletionTests.swift`,
-`FeedDiagnostics.swift`
+`FeedDiagnostics.swift`, `PlaybackSeeking.swift`, `PlaybackAudioSession.swift`,
+`PlaybackTimeSeams.swift`, `PlaybackTransport.swift`, `PlaybackSeekBoundaryTests.swift`,
+`PlaybackSeekWithdrawalTests.swift`,
+`PlaybackFailure.swift`
+(and `PlaybackEngine`'s Now Playing publish, which sits in
+`NowPlayingController.swift` beside the controller it drives)
 and `DownloadManagerThrottleTests.swift` are all splits, not designs — rather than raising the limit. Do not carry a
 remembered line count for any of them: the numbers move every step, and an
 earlier draft of this file was cited as claiming the relaunch suite sits at
@@ -125,6 +130,47 @@ These are not preferences. Each one is a bug being designed out.
   engine reuse the loaded `(guid, localFilename)` pair. The same live pair keeps
   its position, an ended pair restarts from zero, and a changed filename reloads
   even when the guid is unchanged.
+- **A finished episode restarts; it never resumes on its own last frame.**
+  `handleItemEnded` closes the session at `duration`, so spec §4's derived
+  `currentPosition` for a completed episode *is* the end — and a reload that
+  honoured it would start the player on the last frame, where the item ends the
+  instant it starts. The first Play tap would flip to Pause and straight back,
+  and it would append a zero-length row to a log that cannot be rewritten. Every
+  resume therefore goes through `playbackResumePosition(_:duration:)`
+  (`PlaybackPolicy.swift`), which answers `0` within
+  `playbackCompletionTolerance` of the end — an exact comparison misses, because
+  a reported duration moves by milliseconds between loads. Both sites use it:
+  `load(_:filename:url:)` through `loadedPlayhead(_:measured:feed:)` against
+  `assetDuration`, and `handleItemStatus(.readyToPlay)` against the item's. The decision has to be
+  made in `load` too, because `startLoadedPlayback()` opens the session from
+  `elapsed` before the item is ever ready. Pass only a *measured* duration —
+  never `episode.duration`, whose `feedDuration` fallback can understate the
+  file and would restart an episode that is half heard; `nil` correctly says
+  "no end known yet" and defers to the ready seam. No position is destroyed —
+  the session the episode ended in stays in the log for step 7's revert.
+- **The feed's length may not clamp the playhead — before the ready seam or
+  after it.** `handleSeekCompletion` and `handlePeriodicTime` both clamp
+  against `duration`, so keeping a feed length the seam just resumed *past*
+  would drag the restored position straight back onto it: `elapsed` freezes at
+  the feed's number, Now Playing publishes the frozen value, and the heartbeat
+  writes it into the session log as real progress. `duration` is therefore
+  rebuilt at the seam through `reconciledPlaybackDuration(measured:fallback:position:)`
+  — a measured length always wins, and an unmeasured feed length survives only
+  while the playhead is inside it. The seam gets only one chance, and an item
+  that reports no length of its own never gives it a second, so
+  `applyObservedPosition(_:)` reapplies the same rule to every raw player
+  sample before clamping it: both time observers publish through it, so a file
+  longer than its feed says frees the playhead the moment playback crosses the
+  claimed end instead of freezing on it for the rest of the episode. A
+  measured length is never re-judged. A `nil` result is honest: the player's three
+  duration consumers already answer a placeholder bound, `--:--` and a disabled
+  slider for one. `loadedPlayhead(_:measured:feed:)` applies the same rule at
+  load, and for the same reason one step earlier: clamping the resume against
+  the feed's number there opens the session at a position the ready seam then
+  has to correct, and a termination in that window records the regression as
+  the resume position. Because `playbackResumePosition` has already clamped
+  against the measured length, its answer *is* the playhead — never re-clamp it
+  against `duration`.
 - **Unload playback before removing or replacing an episode file.** No view
   does this itself. `DownloadManager` owns an injected guid-based preparation
   callback wired to the engine (`CueApp` supplies
@@ -161,8 +207,9 @@ These are not preferences. Each one is a bug being designed out.
   player sheet's and the lock screen's Play button dead with no feedback.
 - **The engine owns the audio session and does not deactivate it in this step.**
   Activation happens in the one internal start transition (category
-  `.playback`, mode `.spokenAudio`); deactivation belongs to the sleep-timer
-  step. Two lifetime observers reconcile state with the system: an interruption
+  `.playback`, mode `.spokenAudio`) through `activateAudioSession()`, which
+  lives in `PlaybackAudioSession.swift` with the rest of the session handling;
+  deactivation belongs to the sleep-timer step. Two lifetime observers reconcile state with the system: an interruption
   pauses on `.began` and deliberately does not resume on `.ended` (a call must
   never silently restart audio in a pocket), and a route change pauses on
   `.oldDeviceUnavailable`, which the system acts on without posting an
@@ -175,6 +222,204 @@ These are not preferences. Each one is a bug being designed out.
   `skipBackwardCommand` are `isEnabled = false` on purpose, so position cannot
   be lost to a pocket touch. This is a requirement, not an oversight — do not
   "fix" it. The in-app progress slider stays enabled. (spec §8)
+- **The engine reports session boundaries; it never writes them.**
+  `PlaybackEngine` stays SwiftData-free: it emits `SessionEvent` values —
+  positions and rates only, no model types — through an injected
+  `@ObservationIgnored var sessionEvents: ((SessionEvent) -> Void)?`, the
+  `nowPlayingController` / `prepareForFileMutation` precedent. `CueApp` wires
+  that to a `SessionRecorder`; emission tests wire a recording closure and need
+  no container. The seek case is `.seeked(from:target:)` — `to` is a
+  two-character label SwiftLint's `identifier_name` rejects.
+- **One open site, one close funnel.** `startLoadedPlayback()` is the only
+  transition that sets `isPlaying = true`, so it is the only place a session
+  opens (`startPosition = elapsed`, the rate at open). Every `isPlaying = false`
+  goes through `stopPlaying()`, which emits `.stopped(position: elapsed)` only
+  on a true→false transition — so repeated stops close exactly once, and pause,
+  episode switch, end of file, interruption, route loss and every failure path
+  are covered by default rather than as six special cases. A new stop site
+  calls `stopPlaying()`; it never assigns the flag itself. `handleItemEnded`
+  sets `elapsed = duration` *before* stopping so the close carries the end.
+- **Only a user-initiated seek is a boundary, and only once the player says it
+  landed.** `seek(to:)` / `skip(by:)` (`PlaybackSeeking.swift`) *arm* the
+  close-then-open pair while playing by holding the position they moved away
+  from in `pendingSeekBoundaryOrigin`; `handleSeekCompletion` emits it through
+  `reportLandedSeekBoundary()` on a confirmed seek and drops it on a failed
+  one. Committing at the request instead is the same mistake the heartbeat
+  already avoids by standing down until a seek lands: a seek that reports
+  `finished == false` leaves a session whose `startPosition` is the target that
+  was never reached, the next time sample restores the original playhead, and
+  the heartbeat writes a row that ends before it begins into an append-only
+  log. A seek superseded before it lands keeps the first origin — that is where
+  the live session still starts. `seekPlayer(to:)` also serves load resume,
+  restart and duration reclamping and must stay silent. The one internal exception is
+  `armReadySeamCorrection(to:)`: `startLoadedPlayback()` opens the session
+  from the load-time `elapsed`, before the item has reported a length, so the
+  ready seam is the first place that `startPosition` can be known to be wrong —
+  and a finished episode restarting from zero would otherwise leave it ahead of
+  every `endPosition` the heartbeat writes, an inverted row in a log nothing can
+  rewrite. It arms the same origin rather than emitting, for the same reason
+  and with the same failure mode if it did not, and only when a session is live
+  and the playhead actually moves. A seek or a rate change while
+  paused emits nothing — nothing is live, and the next open reads the moved
+  `elapsed` and the new rate. `setRate(_:)` has no same-value guard, so it
+  compares against the current rate before emitting, and `seek(to:)` compares
+  the *clamped* target against `elapsed` for the same reason: skipping back at
+  zero, skipping forward at the end and releasing the slider where it was
+  picked up all clamp to the current position, and each would otherwise close
+  the live session and open a zero-length one in an append-only log.
+- **Nothing else may write the unconfirmed target either.** While a seek is in
+  flight `elapsed` is a position the player has never been at, so every *other*
+  boundary landing in that window — a pause, a rate change, an episode switch,
+  an interruption — records `sessionBoundaryPosition`, which answers the last
+  confirmed playhead until the seek resolves. Otherwise a pause closes the
+  session at a target the seek then refuses, and a rate change reopens one
+  there, which the first real time sample contradicts from the original
+  playhead: the same row that ends before it begins, reached without any seek
+  boundary being emitted at all. `handleSeekCompletion` completes the pair by
+  *withdrawing* the target on `finished == false` — `elapsed` goes back to the
+  confirmed position — because a refused seek that keeps its guess published is
+  what the next `.started` would open at, and paused, no time sample ever
+  arrives to correct it. The withdrawal deliberately runs *after* the
+  failed-restart `pause()`, so the session that opened at a target never reached
+  closes there instead of being credited with everything up to the real
+  playhead. `confirmedPosition` advances only where the player has spoken: an
+  observed time sample, a landed seek, the end of the item, and a load's own
+  starting playhead — which is a confirmation because nothing is live there and
+  `startLoadedPlayback()` opens the next session at that same number, so a
+  refused resume seek withdraws to where the session says it began. The ready
+  seam is the boundary of that rule and not another exception to it: when its
+  target already equals `elapsed` it confirms the playhead only if no seek is
+  pending, because a user seek in flight owns `elapsed` and only its own
+  completion may confirm that target. The one deliberate exception is the
+  *open*: `startLoadedPlayback()` keeps using `elapsed`, because a restart's
+  whole point is that the new session begins at the zero it just asked for, and
+  the load case is what the ready seam exists to correct. A path that ends
+  audible playback with no better position to offer closes *before* it clears
+  the pending-seek state — `publishLoadFailure` had it the other way round, so
+  an item or player failure inside that window recorded the target instead of
+  the confirmed playhead. `handleItemEnded` is the one path that inverts that
+  order, because it *has* a better position: the file played to its end, the
+  outstanding seek can never be reconciled, and the target was clamped to
+  `duration` so closing at the end can invert nothing. Left pending, a session
+  opened at an unreached target is closed there instead of at the end, and
+  `Episode.currentPosition` resumes a finished episode in its middle — pinned by
+  `theEndOfTheItemClosesASessionOpenedAtAnUnreachedTarget`.
+- **A session that opened at an unconfirmed target is bounded by that target,
+  and reconciled when the seek is refused.** The open exception above has a
+  consequence: a resume inside the pre-completion window records a
+  `startPosition` the player has not reached, so the *confirmed* playhead is now
+  behind it and `sessionBoundaryPosition` answering it would write the very
+  inversion that property exists to prevent. `startLoadedPlayback()` therefore
+  remembers that position in `unconfirmedSessionOpenPosition`; while it is set,
+  every boundary in the window closes there instead — an honest zero-length row
+  — and `handleSeekCompletion`'s refusal path calls
+  `reconcileSessionOpenedAtWithdrawnTarget()`, which closes that session where
+  it began and reopens at the playhead the withdrawal restored. Without it the
+  next heartbeat writes `startPosition = 70, endPosition = 10`. It holds the
+  *session's* opening position rather than the pending seek's target, so a
+  superseded seek cannot close a session at a position that session never
+  started from, and it is retired by the completion either way — but
+  deliberately *not* by `stopPlaying()`, because that close is the other half
+  of this rule.
+- **A session closed at an unconfirmed target is corrected by a later row.**
+  The pause, interruption or route loss that closes such a session inside the
+  window bounds it at the target too — the only value that is not an inverted
+  row — so a refusal arriving afterwards leaves the newest row in the log
+  naming a position the player never reached, with nothing live to reconcile:
+  `Episode.currentPosition` reads it and the next launch resumes at 70 while
+  the engine sits at 10. The same
+  `reconcileSessionOpenedAtWithdrawnTarget()` therefore covers both halves —
+  live, it closes and reopens; closed, it emits
+  `.correctedPosition(guid:position:rate:)`, and the recorder appends a
+  zero-length *closed* session at the withdrawn playhead. It is an append
+  because the log cannot be rewritten, and it is the recorder's one insert that
+  is not an open, so it needs no lingering-session probe and can never mint a
+  second live row.
+- **Retiring a seek window is itself a refusal.** `handleSeekCompletion` is the
+  only thing that withdraws an unreached target and reconciles the session
+  opened at it, and a failure, an unload or a replacing load clears
+  `pendingSeekGeneration` first — so that completion is dropped by its own
+  guard and can never arrive. Retired in silence, the session those paths just
+  closed keeps an `endPosition` the player never reached and
+  `Episode.currentPosition` resumes there: 70 for content heard to 10.
+  `retirePendingSeekWindow()` therefore performs the withdrawal itself when a
+  session opened inside the window, giving `elapsed` back to
+  `confirmedPosition` and calling `reconcileSessionOpenedAtWithdrawnTarget()`.
+  Because that correction names a guid and reads a playhead, `unload` and
+  `load` close and retire *before* they clear or overwrite the outgoing
+  episode's identity. `handleItemEnded` is the one caller that opts out
+  (`withdrawing: false`) — it retires before its own close precisely because it
+  holds the better bound, as the paragraph above says. A *second seek* retires
+  the window the same way, because starting one supersedes
+  `pendingSeekGeneration` and drops the outstanding completion just as surely —
+  so `seekPlayer(to:)` calls it with `supersededBySeek: true`, which keeps the
+  state the incoming seek inherits (the first seek's armed origin, its
+  outstanding optimistic ended-flag clear). Only while paused: a live session is
+  closed and reopened by the new seek's own landed boundary, and correcting
+  there as well would close the reopened session at the target it starts behind.
+  Pinned by `anItemFailureAfterTheSessionOpenedAtItsTargetCorrectsThePosition`,
+  `unloadingAfterTheSessionOpenedAtItsTargetCorrectsThePosition`,
+  `aSecondSeekAfterTheSessionClosedAtItsTargetCorrectsThePosition` and
+  `aSecondSeekWhilePlayingLeavesTheCorrectionToItsLandedBoundary`.
+- **An armed seek boundary belongs to the session that armed it.**
+  `stopPlaying()` retires `pendingSeekBoundaryOrigin` along with the session it
+  closes. A pause inside the pre-completion window closes at the confirmed
+  playhead and a resume before the seek lands opens the next session at the
+  target — which is the same pair the boundary would have written, so emitting
+  it as well closes the *new* session at the position it began ahead of:
+  `startPosition = 70, endPosition = 10` in a log nothing can rewrite. Nothing
+  arms an origin while paused (`seek(to:)` and `armReadySeamCorrection(to:)`
+  both require `isPlaying`), so the one stop funnel is the only place a live
+  origin can be dropped, and the other reset sites need no copy of it. Pinned by
+  `resumingDuringAPendingSeekRetiresTheArmedBoundary`.
+- **`SessionRecorder` is a cheap `@MainActor` struct, not a third long-lived
+  service.** It holds a `ModelContext` and no other state: the live session is
+  re-found by fetching `endedAt == nil` at every write, which is what makes
+  "never more than one live session" enforceable rather than assumed from call
+  ordering — an open that finds a lingering live session closes it first. Every
+  operation ends in an explicit `context.save()` (AC 12's 10-second bound
+  cannot lean on autosave, and pending `mainContext` writes are in reach of
+  `FeedService`'s context-wide `rollback()`); a failed open deletes the row it
+  just inserted rather than calling `rollback()`. That live lookup throws
+  rather than answering `nil`, `Episode.isDownloaded(in:)`'s rule: a close, a
+  heartbeat or a boundary may read "cannot tell" as "nothing to write", but an
+  open may not — inserting on it mints a second `endedAt == nil` row, and with
+  two of them the unordered `fetchLimit = 1` lookup sends later heartbeats to
+  an arbitrary one while `Episode.currentPosition` reads the other. No recorder
+  entry point throws — a session-log write must never stop audio — and failures
+  log under the `playback` category with no URL and no raw description.
+- **The heartbeat is its own 10 s observer, and the sweep is its other half.**
+  A second `addPeriodicTimeObserver` (generation-guarded and torn down with the
+  0.5 s UI observer) drives `handleHeartbeat(_:generation:)`, which advances the
+  live session's `endPosition` from its *own* time sample rather than from
+  `elapsed` — the two observers are independently scheduled with no ordering
+  guarantee, so reading the UI observer's value here can persist the previous
+  sample and put the log past AC 12's ten seconds. Both time observers are
+  handled *synchronously* on their `queue: .main` delivery through
+  `MainActor.assumeIsolated`, never a `Task` hop, because that is what makes
+  their `isSeekPending` guard read the pending state as of delivery: hopped, a
+  sample taken before a seek landed is judged after the completion task has
+  cleared that flag and opened the new session, so the stale position is
+  published and heartbeaten in as that session's `endPosition`; that is the entire termination story — there is
+  deliberately no termination observer, because AC 12's "at most 10 seconds
+  behind" *is* the heartbeat interval. `CueApp.init()` then runs
+  `SessionRecorder.closeAbandonedSessions()` right after the container is built
+  — a background launch for a download delivery may never present a scene, so a
+  scene `.task` would leave the row live forever. It closes *every*
+  `endedAt == nil` row at
+  `startedAt + max(0, (endPosition - startPosition) / rate)` — with a
+  non-positive `rate` contributing zero rather than dividing into an infinite
+  or negative span — derived because
+  the schema has no modification timestamp; adding one would be exactly the
+  stored-position churn the spec forbids (spec §9's "last modification" is
+  amended to say so). A sweep failure is logged and
+  non-fatal, the `prepareEpisodesDirectory()` precedent.
+- **The session log is append-only.** The recorder's only `delete` is a row its
+  own failed insert just added — an open, or a correction. Nothing else removes
+  or rewrites history, so a row a refused seek invalidated is superseded by a
+  later one rather than edited, and `Episode.currentPosition` keeps deriving
+  from `sessions` — it ignores
+  `endedAt`, so the live session's heartbeat *is* the resume position.
 - **Zero episodes is a failure only at the fetch boundary.**
   `FeedParser.parse(data:)` returns a zero-episode `ParsedFeed` without
   throwing — parsing is permissive by design, which is what satisfies the
@@ -685,6 +930,12 @@ agent. Everything here follows from that and from `docs/SECRETS.md`.
   `DownloadClock`, driven with `advance(by:)` and `wake()`. No test may sleep
   for a 30 s stall deadline or a 1 s throttle interval. Shared setup for the
   split progress suites lives in `cueTests/DownloadProgressSupport.swift`.
+  The playback seams follow the same rule with their homes in suite files
+  rather than a support file: `SessionEventLog` / `withRecordingEngine` /
+  `playerSeconds(_:)` (`cueTests/PlaybackSessionEventTests.swift`) double the
+  `sessionEvents` seam, and `withLoadedEngine` / `installRejectedAudio` /
+  `episode(filename:)` (`cueTests/PlaybackEngineTests.swift`) build a loaded
+  engine. Call them across suites; never re-declare one.
 - **A test that only calls a timed body has not tested the task that calls it.**
   `flushPendingProgress` and `markStalled` are separated so they are assertable
   without a sleep, but a suite that *only* calls them directly covers neither the

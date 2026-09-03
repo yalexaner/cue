@@ -53,6 +53,17 @@ struct CueApp: App {
             fatalError("could not open the store: \(error)")
         }
         let playback = PlaybackEngine(nowPlayingController: NowPlayingController())
+        // spec §9: a session left live by a termination is closed from its last
+        // heartbeat, and this is the only moment that can be done — a launch
+        // made purely to deliver a background transfer may never present a
+        // scene, so a scene `.task` would leave the row live forever. Non-fatal
+        // for the `prepareEpisodesDirectory()` reason: a stale live session
+        // costs a History row, not the ability to listen.
+        let recorder = SessionRecorder(context: container.mainContext)
+        recorder.closeAbandonedSessions()
+        // the engine reports boundaries; the recorder writes them down. Neither
+        // knows about the other, which is what keeps SwiftData out of playback
+        playback.sessionEvents = { recorder.handle($0) }
         let manager = DownloadManager(
             context: container.mainContext,
             transport: BackgroundDownloader.shared.transport,

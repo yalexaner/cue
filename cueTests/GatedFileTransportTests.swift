@@ -24,4 +24,28 @@ struct GatedFileTransportTests {
             #expect(gate.callCount == 1)
         }
     }
+
+    /// `openParked()` releases the current waiters and shuts again behind them.
+    ///
+    /// This is what a test asserting a transient phase leans on: the transfer
+    /// that takes the slot next must park rather than run to completion.
+    @Test func openParkedReleasesOnlyTheCallsAlreadyWaiting() async throws {
+        try await withTemporaryBaseAsync { base in
+            let gate = GatedFileTransport(stagingDirectory: base)
+            let url = try #require(URL(string: "https://example.com/enclosure.mp3"))
+            let first = Task { try await gate.transport(url) }
+            await yieldUntil { gate.callCount == 1 }
+
+            gate.openParked()
+            _ = try await first.value
+
+            let second = Task { try await gate.transport(url) }
+            await yieldUntil { gate.callCount == 2 }
+            // the gate shut again, so this one is still parked: had it run
+            // through, the task would already hold a value and the cancel
+            // below would be a no-op
+            second.cancel()
+            await #expect(throws: CancellationError.self) { _ = try await second.value }
+        }
+    }
 }

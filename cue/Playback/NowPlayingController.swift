@@ -92,3 +92,22 @@ final class NowPlayingController {
         infoCenter.nowPlayingInfo = nil
     }
 }
+
+/// The engine's Now Playing publish.
+///
+/// It lives beside the controller it drives rather than in `PlaybackEngine.swift`
+/// for the 400-line file limit, following the `PlaybackSeeking.swift` precedent.
+/// It only reads engine state, so no setter is widened by the move; the engine's
+/// controller reference is module-visible for exactly this.
+extension PlaybackEngine {
+    func updateNowPlayingInfo() {
+        guard let episodeTitle else { return }
+        nowPlayingController?.update(
+            title: episodeTitle,
+            podcastTitle: podcastTitle ?? "",
+            duration: duration,
+            elapsed: elapsed,
+            rate: isPlaying ? rate : 0
+        )
+    }
+}

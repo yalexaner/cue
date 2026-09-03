@@ -20,8 +20,12 @@ exportable on-device diagnostics log for reporting a failure. Refresh says which
 feed it is checking, downloaded rows show their own file size, and the add-feed
 sheet offers to paste an address from the clipboard. Downloaded episodes play
 offline with in-app seeking and rate controls plus lock-screen Now Playing and
-play/pause integration. Not built yet: session tracking, sleep timer, OPML
-import. See `ROADMAP.md`.
+play/pause integration. Every listening session is now recorded append-only, so
+a pause, a seek mid-playback or a force-quit leaves the position intact. Not
+built yet: the History screen that surfaces those sessions, played-on-completion,
+the sleep timer, the storage reconciliation sweep, the mini-player, and OPML
+import.
+See `ROADMAP.md`.
 
 ## Build
 

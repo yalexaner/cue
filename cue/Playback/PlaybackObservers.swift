@@ -37,12 +37,32 @@ extension PlaybackEngine {
                 self?.handleItemEnded(generation: generation)
             }
         }
+        // Both time observers are handled synchronously on the delivery queue
+        // rather than through a `Task` hop, which is what lets their seek guard
+        // read the pending state *as of delivery*. Hopped, a sample taken
+        // before a seek landed is judged after the completion task has already
+        // cleared that state and opened the new session, so the stale position
+        // is published as the playhead and heartbeaten into a session that
+        // starts after it — a row that ends before it begins. `queue: .main`
+        // makes the callback main-actor isolated in fact, so the assumption is
+        // the truth the observer was installed with.
         periodicTimeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
-            Task { @MainActor [weak self] in
+            MainActor.assumeIsolated {
                 self?.handlePeriodicTime(time, generation: generation)
+            }
+        }
+        // The session heartbeat is deliberately its own observer rather than a
+        // counter on the 0.5 s UI one: spec §9 names the interval, and a
+        // session write must not be coupled to the UI refresh rate.
+        heartbeatTimeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: sessionHeartbeatInterval, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] time in
+            MainActor.assumeIsolated {
+                self?.handleHeartbeat(time, generation: generation)
             }
         }
     }
@@ -94,6 +114,10 @@ extension PlaybackEngine {
         if let periodicTimeObserver, let player {
             player.removeTimeObserver(periodicTimeObserver)
             self.periodicTimeObserver = nil
+        }
+        if let heartbeatTimeObserver, let player {
+            player.removeTimeObserver(heartbeatTimeObserver)
+            self.heartbeatTimeObserver = nil
         }
     }
 }

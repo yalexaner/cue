@@ -48,13 +48,17 @@ struct PlaybackEngineLifecycleTests {
         }
     }
 
-    @Test(arguments: [(42.0, 42.0), (125.0, 100.0)])
-    func loadStartsAtTheSessionPositionClampedToDuration(
+    /// A stored position short of the end resumes there. One at or past a
+    /// *measured* end is a finished episode and restarts, because starting on
+    /// the last frame plays nothing at all.
+    @Test(arguments: [(42.0, 42.0), (99.5, 0.0), (125.0, 0.0)])
+    func loadResumesTheSessionPositionUnlessTheEpisodeFinished(
         sessionPosition: TimeInterval, expectedPosition: TimeInterval
     ) async throws {
         try await withTemporaryBaseAsync { base in
             let engine = PlaybackEngine()
             let episode = episode(filename: "audio.mp3")
+            episode.assetDuration = 100
             let session = PlaybackSession(
                 startedAt: .now,
                 startPosition: 0,
@@ -87,7 +91,11 @@ struct PlaybackEngineLifecycleTests {
         }
     }
 
-    @Test(arguments: [(125.0, 100.0, 150.0, 100.0, 125.0), (150.0, 200.0, 100.0, 150.0, 100.0)])
+    /// An unmeasured episode carries its raw session position through the load
+    /// — a feed duration is not allowed to judge it — and the item's own
+    /// duration settles it: within reach of the end, resume there; at or past
+    /// the end, the episode is finished and restarts.
+    @Test(arguments: [(125.0, 100.0, 150.0, 125.0, 125.0), (150.0, 200.0, 100.0, 150.0, 0.0)])
     func readyStatusReclampsTheRawResumePositionAgainstTheLocalDuration(
         sessionPosition: TimeInterval, feedDuration: TimeInterval, itemDuration: TimeInterval,
         initialPosition: TimeInterval, expectedPosition: TimeInterval
@@ -120,6 +128,117 @@ struct PlaybackEngineLifecycleTests {
 
             #expect(engine.duration == itemDuration)
             #expect(engine.elapsed == expectedPosition)
+            engine.unload(ifGUID: episode.guid)
+        }
+    }
+
+    /// The load itself may not let the feed judge the playhead either. A feed
+    /// that understates its file would otherwise drag a mid-episode position
+    /// back onto its claimed end before the item is ready — which is the
+    /// `startPosition` the session opens at, and the position a termination in
+    /// that window records as the resume point.
+    @Test func loadKeepsTheFeedDurationFromClampingAnUnmeasuredPosition() async throws {
+        try await withTemporaryBaseAsync { base in
+            let engine = PlaybackEngine()
+            let episode = episode(filename: "audio.mp3")
+            episode.feedDuration = 100
+            episode.sessions.append(
+                PlaybackSession(startedAt: .now, startPosition: 0, endPosition: 150, rate: 1)
+            )
+            let store = EpisodeStore(baseDirectory: base)
+            try store.prepareEpisodesDirectory()
+            try installRejectedAudio(named: "audio.mp3", in: store, base: base)
+
+            try engine.play(episode, store: store)
+
+            #expect(engine.elapsed == 150)
+            // A length the playhead is already past is provably wrong, so it
+            // may not bound the seek and periodic-time clamps either.
+            #expect(engine.duration == nil)
+            engine.unload(ifGUID: episode.guid)
+        }
+    }
+
+    /// A ready item that reports no usable duration of its own leaves the
+    /// resume position unjudged rather than handing it to the feed's value: a
+    /// feed understating its file would otherwise clamp a mid-episode position
+    /// onto its claimed end, read that as finished, and restart from zero.
+    @Test func readyStatusWithNoItemDurationKeepsTheFeedFromRestartingTheEpisode() async throws {
+        try await withTemporaryBaseAsync { base in
+            let engine = PlaybackEngine()
+            let episode = episode(filename: "audio.mp3")
+            episode.feedDuration = 100
+            episode.sessions.append(
+                PlaybackSession(startedAt: .now, startPosition: 0, endPosition: 150, rate: 1)
+            )
+            let store = EpisodeStore(baseDirectory: base)
+            try store.prepareEpisodesDirectory()
+            try installRejectedAudio(named: "audio.mp3", in: store, base: base)
+
+            try engine.play(episode, store: store)
+
+            engine.handleItemStatus(
+                .readyToPlay,
+                itemDuration: nil,
+                error: nil,
+                generation: engine.loadGeneration
+            )
+
+            // a feed length the playhead has passed is provably wrong, so it
+            // is dropped rather than left to clamp the position back onto it
+            #expect(engine.duration == nil)
+            #expect(engine.elapsed == 150)
+
+            // the seams that write `elapsed` must not undo the restored
+            // position: clamping them against the feed value froze the
+            // playhead at 100 and heartbeated that into the session log
+            engine.handleSeekCompletion(
+                finished: true,
+                target: 150,
+                seekGeneration: engine.seekGeneration,
+                loadGeneration: engine.loadGeneration
+            )
+            #expect(engine.elapsed == 150)
+
+            engine.handlePeriodicTime(playerSeconds(160), generation: engine.loadGeneration)
+            #expect(engine.elapsed == 160)
+            engine.unload(ifGUID: episode.guid)
+        }
+    }
+
+    /// The complementary case: at the ready seam the playhead is still *inside*
+    /// the feed's claimed length, so nothing has disproved it yet — and an item
+    /// that reports no length of its own never returns to the seam. Left to
+    /// bound the time samples, that claim freezes `elapsed` on it for the rest
+    /// of the episode and the heartbeat writes the frozen value to the log.
+    @Test func aFeedLengthThePlaybackCrossesStopsBoundingThePlayhead() async throws {
+        try await withTemporaryBaseAsync { base in
+            let engine = PlaybackEngine()
+            let episode = episode(filename: "audio.mp3")
+            episode.feedDuration = 100
+            let store = EpisodeStore(baseDirectory: base)
+            try store.prepareEpisodesDirectory()
+            try installRejectedAudio(named: "audio.mp3", in: store, base: base)
+
+            try engine.play(episode, store: store)
+            engine.handleItemStatus(
+                .readyToPlay,
+                itemDuration: nil,
+                error: nil,
+                generation: engine.loadGeneration
+            )
+            #expect(engine.duration == 100)
+
+            engine.handlePeriodicTime(playerSeconds(90), generation: engine.loadGeneration)
+            #expect(engine.elapsed == 90)
+
+            // the file is longer than the feed said, and the sample proves it
+            engine.handlePeriodicTime(playerSeconds(120), generation: engine.loadGeneration)
+            #expect(engine.duration == nil)
+            #expect(engine.elapsed == 120)
+
+            engine.handleHeartbeat(playerSeconds(130), generation: engine.loadGeneration)
+            #expect(engine.elapsed == 130)
             engine.unload(ifGUID: episode.guid)
         }
     }
