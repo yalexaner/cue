@@ -166,12 +166,16 @@ struct DownloadManagerQueueTests {
             await yieldUntil { manager.state(for: second) != nil }
             try #require(manager.state(for: second) == .downloading(.queued(position: 1)))
 
-            gate.open()
+            // only the parked call: the gate stays shut so the second transfer
+            // holds at `connecting` instead of running to completion inside the
+            // scheduler turn this assertion samples across
+            gate.openParked()
             try await firstDownload.value
             // the slot was handed on, so the queued transfer is now connecting
             await yieldUntil { manager.state(for: second) == .downloading(.connecting) }
             #expect(manager.state(for: second) == .downloading(.connecting))
 
+            gate.open()
             try await secondDownload.value
             #expect(second.localFilename != nil)
         }

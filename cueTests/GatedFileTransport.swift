@@ -35,12 +35,34 @@ final class GatedFileTransport: @unchecked Sendable {
 
     /// Lets every parked call through, and every later one straight past.
     func open() {
-        let parked = lock.withLock { () -> [Waiter] in
-            isOpen = true
-            let parked = waiting
-            waiting = []
-            return parked
-        }
+        resume(
+            parked: lock.withLock { () -> [Waiter] in
+                isOpen = true
+                let parked = waiting
+                waiting = []
+                return parked
+            })
+    }
+
+    /// Lets the calls parked *now* through and leaves the gate shut behind them.
+    ///
+    /// `open()` is permanent, so a transfer that reaches the transport after it
+    /// is never held: its `connecting` phase lasts only as long as the transport
+    /// takes to answer, and `yieldUntil` samples between scheduler turns, so a
+    /// test asserting that phase can miss it and read the cleared state of a
+    /// finished transfer instead. Releasing only the current waiters hands the
+    /// slot on while keeping the next transfer parked, which makes `connecting`
+    /// a state that persists until the test says otherwise.
+    func openParked() {
+        resume(
+            parked: lock.withLock { () -> [Waiter] in
+                let parked = waiting
+                waiting = []
+                return parked
+            })
+    }
+
+    private func resume(parked: [Waiter]) {
         for waiter in parked {
             waiter.continuation.resume()
         }
